@@ -140,21 +140,22 @@ class LazySupervisedDataset(Dataset):
             # print(111, image_root)
             # print(222, example['image'])
             image_path = os.path.join(image_root, example['image'])
-            x1, y1, x2, y2 = example["solution"]
+            mask = example["solution"]
             normal_caption = example["normal_caption"]
-            return  [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "image": f"file://{image_path}"},
-                            {"type": "text", "text": example["problem"]},
-                        ],
-                    },
-                    {
-                        "role": "assistant",
-                        "content": f'```json\n[\n\t{{"bbox_2d": [{int(x1)}, {int(y1)}, {int(x2)}, {int(y2)}], "label": "{normal_caption}"}}\n]\n```',
-                    }
-                ]
+            mask_str = json.dumps(mask)
+            return [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": f"file://{image_path}"},
+                        {"type": "text", "text": example["problem"]},
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": f'```json\n[\n\t{{"mask": {mask_str}, "label": "{normal_caption}"}}\n]\n```',
+                },
+            ]
 
         example = self.list_data_dict[i]
         example["messages"] = make_conversation_image(example)

@@ -58,7 +58,7 @@ class GRPOScriptArguments(ScriptArguments):
 
     reward_funcs: list[str] = field(
         default_factory=lambda: ["accuracy", "format"],
-        metadata={"help": "List of reward functions. Possible values: 'accuracy', 'format'"},
+        metadata={"help": "List of reward functions. Possible values: 'accuracy', 'mask_iou', 'format'"},
     )
     max_pixels: Optional[int] = field(
         default=12845056,
@@ -210,6 +210,7 @@ def main(script_args, training_args, model_args):
     # Load the reward functions
     reward_funcs_registry = {
         "accuracy": vlm_module_cls.iou_reward,
+        "mask_iou": vlm_module_cls.mask_iou_reward,
         "format": vlm_module_cls.format_reward_rec,
     }
     reward_funcs = [reward_funcs_registry[func] for func in script_args.reward_funcs]
