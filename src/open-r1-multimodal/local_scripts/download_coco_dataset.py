@@ -6,10 +6,12 @@ import json
 from pycocotools.coco import COCO
 from tqdm import tqdm
 
-TRAIN_URL = "https://huggingface.co/datasets/omlab/VLM-R1/resolve/main/train2014.zip"
-VAL_URL = "https://huggingface.co/datasets/omlab/VLM-R1/resolve/main/val2014.zip"
-ANN_URL = "https://huggingface.co/datasets/omlab/VLM-R1/resolve/main/annotations_trainval2014.zip"
-REC_JSON_URL = "https://huggingface.co/datasets/omlab/VLM-R1/resolve/main/rec_jsons_processed.zip"
+# Official COCO download links. These contain the raw images and
+# annotation files with polygon segmentations which we convert to RLE
+# format for training.
+TRAIN_URL = "http://images.cocodataset.org/zips/train2014.zip"
+VAL_URL = "http://images.cocodataset.org/zips/val2014.zip"
+ANN_URL = "http://images.cocodataset.org/annotations/annotations_trainval2014.zip"
 
 def download_and_extract(url: str, dest_dir: str):
     os.makedirs(dest_dir, exist_ok=True)
@@ -57,7 +59,6 @@ def main():
     download_and_extract(TRAIN_URL, out)
     download_and_extract(VAL_URL, out)
     download_and_extract(ANN_URL, out)
-    download_and_extract(REC_JSON_URL, out)
 
     train_ann = os.path.join(out, "annotations", "instances_train2014.json")
     val_ann = os.path.join(out, "annotations", "instances_val2014.json")
