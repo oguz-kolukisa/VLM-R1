@@ -79,7 +79,7 @@ class Qwen2VLModule(VLMBaseModule):
                 )
                 return SYSTEM_PROMPT + '\n' + "{Question}"
             case "segment":
-                return "{Question} First output the thinking process in <think> </think> tags and then output the final answer in <answer> </answer> tags. Output the final answer in JSON format."
+                return "{Question} First output the thinking process in <think> </think> tags and then output the final answer in <answer> </answer> tags. Output the final answer in JSON format of {\"polygons\":[...]}."
             case _:
                 return "{Question} First output the thinking process in <think> </think> tags and then output the final answer in <answer> </answer> tags."
             
@@ -102,7 +102,57 @@ class Qwen2VLModule(VLMBaseModule):
                     f.write(f"Content: {content}\n")
                     f.write(f"Has format: {bool(match)}\n")
         return [1.0 if match else 0.0 for match in matches]
-    
+    @staticmethod
+    def format_reward_segment(completions, **kwargs):
+        """
+        Reward 1 · 0 if the completion contains:
+
+            <think> … </think>
+            <answer> … {"polygon": [...]} … </answer>
+
+        where "polygon" maps to a JSON list (one or more comma-separated numbers).
+
+        Everything else earns 0 · 0.
+        """
+        import re
+        import os
+        import json
+        from datetime import datetime
+
+        # Finds the first {...} block inside <answer>…</answer>
+        ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
+        JSON_RE   = re.compile(r"\{.*?\}", re.DOTALL)      # first JSON-looking chunk
+
+        def has_polygon_list(text: str) -> bool:
+            """Return True if text contains a JSON object with a list-valued 'polygon' key."""
+            answer_match = ANSWER_RE.search(text)
+            if not answer_match:
+                return False
+
+            # Try to pull out the JSON substring and parse it
+            json_match = JSON_RE.search(answer_match.group(1))
+            if not json_match:
+                return False
+            try:
+                obj = json.loads(json_match.group(0))
+            except json.JSONDecodeError:
+                return False
+
+            return isinstance(obj.get("polygon"), list)
+
+        matches = [has_polygon_list(completion[0]["content"]) for completion in completions]
+
+        # Optional debug logging exactly as before
+        if os.getenv("DEBUG_MODE") == "true":
+            log_path = os.getenv("LOG_PATH")
+            current_time = datetime.now().strftime("%d-%H-%M-%S-%f")
+            with open(log_path.replace(".txt", "_format.txt"), "a", encoding="utf-8") as f:
+                f.write(f"------------- {current_time} Format reward -------------\n")
+                for content, match in zip([c[0]['content'] for c in completions], matches):
+                    f.write(f"Content: {content}\nHas correct format: {match}\n")
+
+        # Reward is 1.0 when the condition is satisfied, else 0.0
+        return [1.0 if match else 0.0 for match in matches]
     @staticmethod
     def iou_reward(completions, solution, **kwargs):
         """Calculate IoU reward between predicted bounding box from Qwen model and ground truth bounding box."""
@@ -222,7 +272,7 @@ class Qwen2VLModule(VLMBaseModule):
                 case "rec":
                     return Qwen2VLModule.format_reward_rec
                 case "segment":
-                    return Qwen2VLModule.format_reward_rec
+                    return Qwen2VLModule.format_reward_segment
                 case _:
                     raise ValueError(f"Unsupported reward function: {func}")
         else:
