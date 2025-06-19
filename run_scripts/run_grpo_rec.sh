@@ -5,6 +5,10 @@ echo "REPO_HOME: $REPO_HOME"
 data_paths="/training/shz/dataset/vlm-r1/rec_jsonsl_train/refcoco_train.jsonl:/training/shz/dataset/vlm-r1/rec_jsonsl_train/refcocop_train.jsonl:/training/shz/dataset/vlm-r1/rec_jsonsl_train/refcocog_train.jsonl" 
 image_folders="/training/shz/dataset/coco:/training/shz/dataset/coco:/training/shz/dataset/coco"
 model_path="/training/models/Qwen2.5-VL-3B-Instruct"
+
+data_paths="/mnt/j/Workspace/coco/VLM-R1/data/train.jsonl"
+image_folders="/mnt/j/Workspace/coco/VLM-R1/data/"
+model_path="/mnt/j/Workspace/coco/VLM-R1/Qwen2.5-VL-3B-Instruct"
 is_reward_customized_from_vlm_module=True
 echo "data_paths: $data_paths"
 echo "image_folders: $image_folders"
@@ -22,7 +26,7 @@ export LOG_PATH="${REPO_HOME}/runs/${EXP_NAME}/log/debug_log.$(date +%Y-%m-%d-%H
 
 # export WANDB_DISABLED=true
 # CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6
-torchrun --nproc_per_node="8" \
+torchrun --nproc_per_node="1" \
     --nnodes="1" \
     --node_rank="0" \
     --master_addr="127.0.0.1" \
@@ -46,9 +50,9 @@ torchrun --nproc_per_node="8" \
     --run_name ${EXP_NAME} \
     --data_seed 42 \
     --save_steps 100 \
-    --num_generations 8 \
+    --num_generations 2 \
     --max_completion_length 2048 \
-    --reward_funcs accuracy format \
+    --reward_funcs mask_iou  format \
     --beta 0.04 \
     --report_to wandb \
     --dataset-name this_is_not_used \
