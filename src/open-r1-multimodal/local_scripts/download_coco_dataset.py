@@ -27,7 +27,7 @@ def download_and_extract(url: str, dest_dir: str):
     print(f"Extracting {fname}...")
     with zipfile.ZipFile(fname, "r") as z:
         z.extractall(dest_dir)
-    #os.remove(fname)
+    os.remove(fname)
 
 
 def convert_split(ann_file: str, img_dir: str, out_path: str):
