@@ -31,24 +31,44 @@ def download_and_extract(url: str, dest_dir: str):
 
 
 def convert_split(ann_file: str, img_dir: str, out_path: str):
+    """Convert COCO annotations to jsonl format used by ``grpo_jsonl.py``.
+
+    Each line in ``out_path`` contains an object with ``id``, ``image`` and
+    ``conversations`` fields so that the dataset can be streamed during
+    training.
+    """
+
     coco = COCO(ann_file)
     cats = {c["id"]: c["name"] for c in coco.loadCats(coco.getCatIds())}
-    data = []
-    for ann_id in tqdm(coco.getAnnIds(), desc=f"Formatting {os.path.basename(ann_file)}"):
-        ann = coco.loadAnns(ann_id)[0]
-        img = coco.loadImgs(ann["image_id"])[0]
-        example = {
-            "image": os.path.join(img_dir, img["file_name"]),
-            "problem": f"Segment the {cats[ann['category_id']]}.",
-            "normal_caption": cats[ann["category_id"]],
-            "solution": {
+
+    with open(out_path, "w") as f:
+        for idx, ann_id in enumerate(
+            tqdm(coco.getAnnIds(), desc=f"Formatting {os.path.basename(ann_file)}"),
+            start=1,
+        ):
+            ann = coco.loadAnns(ann_id)[0]
+            img = coco.loadImgs(ann["image_id"])[0]
+            solution = {
                 "polygons": ann["segmentation"],
                 "size": [img["height"], img["width"]],
-            },
-        }
-        data.append(example)
-    with open(out_path, "w") as f:
-        json.dump(data, f)
+            }
+            example = {
+                "id": idx,
+                "image": os.path.join(img_dir, img["file_name"]),
+                "conversations": [
+                    {
+                        "from": "human",
+                        "value": f"<image>Segment the {cats[ann['category_id']]}.",
+                    },
+                    {
+                        "from": "gpt",
+                        "value": "<answer>"
+                        + json.dumps(solution, separators=(",", ":"))
+                        + "</answer>",
+                    },
+                ],
+            }
+            f.write(json.dumps(example) + "\n")
 
 
 def main():
@@ -64,9 +84,9 @@ def main():
     train_ann = os.path.join(out, "annotations", "instances_train2014.json")
     val_ann = os.path.join(out, "annotations", "instances_val2014.json")
     if os.path.exists(train_ann):
-        convert_split(train_ann, "train2014", os.path.join(out, "train.json"))
+        convert_split(train_ann, "train2014", os.path.join(out, "train.jsonl"))
     if os.path.exists(val_ann):
-        convert_split(val_ann, "val2014", os.path.join(out, "val.json"))
+        convert_split(val_ann, "val2014", os.path.join(out, "val.jsonl"))
     print(f"COCO dataset is ready at {out}")
 
 
