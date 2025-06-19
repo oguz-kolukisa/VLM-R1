@@ -213,7 +213,7 @@ class Qwen2VLModule(VLMBaseModule):
                     raise ValueError(f"Unsupported reward function: {func}")
         elif func == "mask_iou":
             match task_type:
-                case "rec":
+                case "segment":
                     return Qwen2VLModule.mask_iou_reward
                 case _:
                     raise ValueError(f"Unsupported reward function: {func}")
