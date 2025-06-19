@@ -14,7 +14,7 @@ echo "data_paths: $data_paths"
 echo "image_folders: $image_folders"
 
 export EXP_NAME="Qwen2.5-VL-3B-Instruct-segment" # TODO: change this to your own experiment name
-TASK_TYPE="rec"
+TASK_TYPE="segment"
 cd ${REPO_HOME}/src/open-r1-multimodal
 
 export DEBUG_MODE="true" # Enable Debug if you want to see the rollout of model during RL
