@@ -213,7 +213,7 @@ class InvernVLModule(VLMBaseModule):
 
     @staticmethod
     def mask_iou_reward(completions, solution, **kwargs):
-        """Calculate IoU reward between predicted mask and ground truth mask."""
+        """Calculate IoU reward between predicted polygons and ground truth polygons."""
         import re
         import os
         import json
@@ -232,10 +232,14 @@ class InvernVLModule(VLMBaseModule):
                 if content_answer_match:
                     content_answer = content_answer_match.group(1).strip()
                     pred = json.loads(content_answer)
-                    gt_mask = sol.get("mask", sol)
-                    pred_mask = pred.get("mask")
-                    if pred_mask is not None and gt_mask is not None:
-                        iou = maskUtils.iou([pred_mask], [gt_mask], [False])[0][0]
+                    gt_poly = sol.get("polygon") or sol.get("polygons")
+                    pred_poly = pred.get("polygon") or pred.get("polygons")
+                    size = sol.get("size")
+                    if gt_poly is not None and pred_poly is not None and size is not None:
+                        h, w = size
+                        gt_rle = maskUtils.merge(maskUtils.frPyObjects(gt_poly, h, w))
+                        pred_rle = maskUtils.merge(maskUtils.frPyObjects(pred_poly, h, w))
+                        iou = maskUtils.iou([pred_rle], [gt_rle], [False])[0][0]
                         reward = float(iou)
             except Exception:
                 pass

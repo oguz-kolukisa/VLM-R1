@@ -17,7 +17,8 @@ def extract_mask_answer(content):
     mask_json = json_match.group(1).strip() if json_match else None
     if mask_json:
         try:
-            return json.loads(mask_json)[0]["mask"]
+            data = json.loads(mask_json)[0]
+            return data.get("polygon") or data.get("polygons")
         except Exception:
             return None
     return None
@@ -73,14 +74,23 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
         dt_anns = []
         images = []
         for idx, (ex, out) in enumerate(zip(data, all_outputs)):
-            gt_mask = ex["solution"]
-            pred_mask = extract_mask_answer(out)
-            if pred_mask is None:
-                pred_mask = {"size": gt_mask["size"], "counts": ""}
-            width, height = gt_mask["size"][1], gt_mask["size"][0]
+            gt_poly = ex["solution"]["polygons"]
+            size = ex["solution"]["size"]
+            width, height = size[1], size[0]
+            pred_poly = extract_mask_answer(out)
+            if pred_poly is None:
+                pred_poly = []
+
+            gt_rle = maskUtils.merge(maskUtils.frPyObjects(gt_poly, height, width))
+            pred_rle = maskUtils.merge(maskUtils.frPyObjects(pred_poly, height, width)) if pred_poly else {"size": [height, width], "counts": ""}
+            if isinstance(gt_rle["counts"], bytes):
+                gt_rle["counts"] = gt_rle["counts"].decode("utf-8")
+            if isinstance(pred_rle.get("counts"), bytes):
+                pred_rle["counts"] = pred_rle["counts"].decode("utf-8")
+
             images.append({"id": idx, "width": width, "height": height})
-            gt_anns.append({"id": idx, "image_id": idx, "category_id": 1, "segmentation": gt_mask, "area": float(maskUtils.area(gt_mask)), "iscrowd": 0})
-            dt_anns.append({"id": idx, "image_id": idx, "category_id": 1, "segmentation": pred_mask, "score": 1.0})
+            gt_anns.append({"id": idx, "image_id": idx, "category_id": 1, "segmentation": gt_rle, "area": float(maskUtils.area(gt_rle)), "iscrowd": 0})
+            dt_anns.append({"id": idx, "image_id": idx, "category_id": 1, "segmentation": pred_rle, "score": 1.0})
 
         coco_gt = COCO()
         coco_gt.dataset = {"images": images, "annotations": gt_anns, "categories": [{"id": 1, "name": "segm"}]}

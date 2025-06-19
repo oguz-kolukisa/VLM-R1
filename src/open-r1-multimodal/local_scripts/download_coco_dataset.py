@@ -37,13 +37,14 @@ def convert_split(ann_file: str, img_dir: str, out_path: str):
     for ann_id in tqdm(coco.getAnnIds(), desc=f"Formatting {os.path.basename(ann_file)}"):
         ann = coco.loadAnns(ann_id)[0]
         img = coco.loadImgs(ann["image_id"])[0]
-        rle = coco.annToRLE(ann)
-        rle["counts"] = rle["counts"].decode("utf-8") if isinstance(rle["counts"], bytes) else rle["counts"]
         example = {
             "image": os.path.join(img_dir, img["file_name"]),
             "problem": f"Segment the {cats[ann['category_id']]}.",
             "normal_caption": cats[ann["category_id"]],
-            "solution": rle,
+            "solution": {
+                "polygons": ann["segmentation"],
+                "size": [img["height"], img["width"]],
+            },
         }
         data.append(example)
     with open(out_path, "w") as f:
