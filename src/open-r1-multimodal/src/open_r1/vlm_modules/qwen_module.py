@@ -158,11 +158,57 @@ class Qwen2VLModule(VLMBaseModule):
         return rewards
 
     @staticmethod
+    def mask_iou_reward(completions, solution, **kwargs):
+        """Calculate IoU reward between predicted mask and ground truth mask."""
+        import re
+        import os
+        import json
+        from datetime import datetime
+        from pycocotools import mask as maskUtils
+
+        contents = [completion[0]["content"] for completion in completions]
+        rewards = []
+        answer_tag_pattern = r'<answer>(.*?)</answer>'
+        for content, sol in zip(contents, solution):
+            sol = re.findall(answer_tag_pattern, sol, re.DOTALL)[-1]
+            sol = json.loads(sol.strip())
+            reward = 0.0
+            try:
+                content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+                if content_answer_match:
+                    content_answer = content_answer_match.group(1).strip()
+                    pred = json.loads(content_answer)
+                    gt_mask = sol.get("mask", sol)
+                    pred_mask = pred.get("mask")
+                    if pred_mask is not None and gt_mask is not None:
+                        iou = maskUtils.iou([pred_mask], [gt_mask], [False])[0][0]
+                        reward = float(iou)
+            except Exception:
+                pass
+
+            rewards.append(reward)
+            if os.getenv("DEBUG_MODE") == "true":
+                log_path = os.getenv("LOG_PATH")
+                current_time = datetime.now().strftime("%d-%H-%M-%S-%f")
+                if reward <= 1.0:
+                    with open(log_path, "a", encoding='utf-8') as f:
+                        f.write(f"------------- {current_time} Mask IoU reward: {reward} -------------\n")
+                        f.write(f"Content: {content}\n")
+                        f.write(f"Solution: {sol}\n")
+        return rewards
+
+    @staticmethod
     def select_reward_func(func: str, task_type: str):
         if func == "accuracy":
             match task_type:
                 case "rec":
                     return Qwen2VLModule.iou_reward
+                case _:
+                    raise ValueError(f"Unsupported reward function: {func}")
+        elif func == "mask_iou":
+            match task_type:
+                case "rec":
+                    return Qwen2VLModule.mask_iou_reward
                 case _:
                     raise ValueError(f"Unsupported reward function: {func}")
         elif func == "format":

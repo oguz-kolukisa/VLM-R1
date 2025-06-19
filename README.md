@@ -93,9 +93,8 @@ bash setup.sh
 
 #### 📚 GRPO
 
-1. Download the [COCO Train2014 image](https://huggingface.co/datasets/omlab/VLM-R1/resolve/main/train2014.zip) and unzip it, and we refer to the image dir as `<your_image_root>`.
-2. Download the [RefCOCO/+/g and LISA-Grounding Annotation files](https://huggingface.co/datasets/omlab/VLM-R1/resolve/main/rec_jsons_processed.zip) and unzip it (LISA-Grounding is used for out-of-domain evaluation).
-3. Change the `data_paths` and `image_folders` in the [run_scripts/run_grpo_rec.sh](run_scripts/run_grpo_rec.sh) file.
+1. Run `python src/open-r1-multimodal/local_scripts/download_coco_dataset.py --output_dir <data_dir>` to download the COCO images and processed annotations.
+2. Change the `data_paths` and `image_folders` in the [run_scripts/run_grpo_rec.sh](run_scripts/run_grpo_rec.sh) file to point to `<data_dir>`.
 
 ```bash
 # These jsonl files are included in the annotation files at step 2.
@@ -104,7 +103,7 @@ data_paths="path/to/refcoco_train.jsonl:path/to/refcocop_train.jsonl:path/to/ref
 image_folders="path/to/coco:path/to/coco:path/to/coco"
 ```
 
-4. ``bash run_scripts/run_grpo_rec.sh``
+3. ``bash run_scripts/run_grpo_rec.sh``
 
 > [!NOTE]
 > If you encounter 'CUDA out of memory' error, you can try to reduce the `per_device_train_batch_size`.
