@@ -93,7 +93,7 @@ bash setup.sh
 
 #### 📚 GRPO
 
-1. Run `python src/open-r1-multimodal/local_scripts/download_coco_dataset.py --output_dir <data_dir>` to download the COCO images and polygon segmentation annotations from the official website.
+1. Run `python src/open-r1-multimodal/local_scripts/download_coco_dataset.py --output_dir <data_dir>` to download the COCO images and polygon segmentation annotations from the official website. The converted annotations will be saved as `<data_dir>/train.jsonl` and `<data_dir>/val.jsonl`, with each line containing an `id`, `image`, and `conversations` field as described below.
 2. Change the `data_paths` and `image_folders` in the [run_scripts/run_grpo_rec.sh](run_scripts/run_grpo_rec.sh) file to point to `<data_dir>`.
 
 ```bash
