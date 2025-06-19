@@ -221,6 +221,8 @@ class Qwen2VLModule(VLMBaseModule):
             match task_type:
                 case "rec":
                     return Qwen2VLModule.format_reward_rec
+                case "segment":
+                    return Qwen2VLModule.format_reward_rec
                 case _:
                     raise ValueError(f"Unsupported reward function: {func}")
         else:
