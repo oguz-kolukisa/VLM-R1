@@ -6,14 +6,14 @@ data_paths="/training/shz/dataset/vlm-r1/rec_jsonsl_train/refcoco_train.jsonl:/t
 image_folders="/training/shz/dataset/coco:/training/shz/dataset/coco:/training/shz/dataset/coco"
 model_path="/training/models/Qwen2.5-VL-3B-Instruct"
 
-data_paths="/mnt/j/Workspace/coco/VLM-R1/data/train.jsonl"
-image_folders="/mnt/j/Workspace/coco/VLM-R1/data/"
-model_path="/mnt/j/Workspace/coco/VLM-R1/Qwen2.5-VL-3B-Instruct"
+data_paths="/workspace/VLM-R1/data/train.jsonl"
+image_folders="/workspace/VLM-R1/data/"
+model_path="/workspace/VLM-R1/Qwen2.5-VL-3B-Instruct"
 is_reward_customized_from_vlm_module=True
 echo "data_paths: $data_paths"
 echo "image_folders: $image_folders"
 
-export EXP_NAME="Qwen2.5-VL-3B-Instruct-rec" # TODO: change this to your own experiment name
+export EXP_NAME="Qwen2.5-VL-3B-Instruct-segment" # TODO: change this to your own experiment name
 TASK_TYPE="rec"
 cd ${REPO_HOME}/src/open-r1-multimodal
 
@@ -40,7 +40,7 @@ torchrun --nproc_per_node="1" \
     --image_folders $image_folders \
     --is_reward_customized_from_vlm_module $is_reward_customized_from_vlm_module \
     --task_type $TASK_TYPE \
-    --per_device_train_batch_size 8 \
+    --per_device_train_batch_size 32 \
     --gradient_accumulation_steps 2 \
     --gradient_checkpointing true \
     --logging_steps 1 \
@@ -49,7 +49,7 @@ torchrun --nproc_per_node="1" \
     --attn_implementation flash_attention_2 \
     --run_name ${EXP_NAME} \
     --data_seed 42 \
-    --save_steps 100 \
+    --save_steps 20 \
     --num_generations 2 \
     --max_completion_length 2048 \
     --reward_funcs mask_iou  format \

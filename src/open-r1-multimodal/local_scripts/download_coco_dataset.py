@@ -58,7 +58,7 @@ def convert_split(ann_file: str, img_dir: str, out_path: str):
                 "conversations": [
                     {
                         "from": "human",
-                        "value": f"<image>Segment the {cats[ann['category_id']]}.",
+                        "value": f"<image>What is the segmendation polygons for the object {cats[ann['category_id']]}.",
                     },
                     {
                         "from": "gpt",
