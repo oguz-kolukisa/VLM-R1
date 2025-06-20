@@ -40,7 +40,7 @@ torchrun --nproc_per_node="1" \
     --image_folders $image_folders \
     --is_reward_customized_from_vlm_module $is_reward_customized_from_vlm_module \
     --task_type $TASK_TYPE \
-    --per_device_train_batch_size 32 \
+    --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 2 \
     --gradient_checkpointing true \
     --logging_steps 1 \
