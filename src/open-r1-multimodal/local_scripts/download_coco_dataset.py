@@ -128,7 +128,8 @@ def convert_split(ann_file: str, img_dir: str, out_path: str,
 
             solution = {
                 "centre": [round(c, 2) for c in centre],
-                "coeffs": [round(c, 4) for c in coeffs],   # keep file size small
+                "coeffs": [round(c, 4) for c in coeffs],
+                "size":   [img["height"], img["width"]],   # keep file size small
             }
 
             example = {
