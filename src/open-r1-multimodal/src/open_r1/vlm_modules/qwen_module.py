@@ -215,7 +215,7 @@ class Qwen2VLModule(VLMBaseModule):
                         f.write(f"Solution: {sol}\n") 
         return rewards
 
-        @staticmethod
+    
     @staticmethod
     def mask_iou_reward(completions, solution, **kwargs):
         """
