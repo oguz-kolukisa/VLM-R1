@@ -79,7 +79,7 @@ class Qwen2VLModule(VLMBaseModule):
                 )
                 return SYSTEM_PROMPT + '\n' + "{Question}"
             case "segment":
-                return "{Question} First output the thinking process in <think> </think> tags and then output the final answer in <answer> </answer> tags. Output the final answer in JSON format with key 'polygons':"
+                return "{Question} First, write your reasoning inside <think>...</think> tags. Next, write the final answer inside <answer>...</answer> tags.The content of <answer> MUST be valid JSON of the form centre:[cx,cy],coeffs:[c0,c1,c2,...] Use exactly those two keys and no others."
             case _:
                 return "{Question} First output the thinking process in <think> </think> tags and then output the final answer in <answer> </answer> tags."
             
@@ -105,32 +105,28 @@ class Qwen2VLModule(VLMBaseModule):
     @staticmethod
     def format_reward_segment(completions, **kwargs):
         """
-        Reward 1 · 0 if the completion contains:
+        Reward 1·0 if a completion contains
 
-            <think> … </think>
-            <answer> … {"polygon": [...]} … </answer>
+            <answer> … {"centre":[cx,cy],"coeffs":[…]} … </answer>
 
-        where "polygon" maps to a JSON list (one or more comma-separated numbers).
-
-        Everything else earns 0 · 0.
+        with the structural rules above.  Anything else earns 0·0.
         """
         import re
         import os
         import json
         from datetime import datetime
 
-        # Finds the first {...} block inside <answer>…</answer>
+        # -- regex helpers -------------------------------------------------------
         ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
-        JSON_RE   = re.compile(r"\{.*?\}", re.DOTALL)      # first JSON-looking chunk
+        JSON_RE   = re.compile(r"\{.*?\}", re.DOTALL)        # first {...} inside <answer>
 
-        def has_polygon_list(text: str) -> bool:
-            """Return True if text contains a JSON object with a list-valued 'polygon' key."""
-            answer_match = ANSWER_RE.search(text)
-            if not answer_match:
+        # -- core checker --------------------------------------------------------
+        def valid_polycoords(text: str) -> bool:
+            ans_match = ANSWER_RE.search(text)
+            if not ans_match:
                 return False
 
-            # Try to pull out the JSON substring and parse it
-            json_match = JSON_RE.search(answer_match.group(1))
+            json_match = JSON_RE.search(ans_match.group(1))
             if not json_match:
                 return False
             try:
@@ -138,11 +134,20 @@ class Qwen2VLModule(VLMBaseModule):
             except json.JSONDecodeError:
                 return False
 
-            return isinstance(obj.get("polygon"), list)
+            centre = obj.get("centre")
+            coeffs = obj.get("coeffs")
 
-        matches = [has_polygon_list(completion[0]["content"]) for completion in completions]
+            if (not isinstance(centre, list) or len(centre) != 2 or
+                not all(isinstance(x, (int, float)) for x in centre)):
+                return False
+            if (not isinstance(coeffs, list) or len(coeffs) == 0 or
+                not all(isinstance(x, (int, float)) for x in coeffs)):
+                return False
+            return True
 
-        # Optional debug logging exactly as before
+        matches = [valid_polycoords(c[0]["content"]) for c in completions]
+
+        # -- optional debugging (unchanged) --------------------------------------
         if os.getenv("DEBUG_MODE") == "true":
             log_path = os.getenv("LOG_PATH")
             current_time = datetime.now().strftime("%d-%H-%M-%S-%f")
@@ -151,8 +156,9 @@ class Qwen2VLModule(VLMBaseModule):
                 for content, match in zip([c[0]['content'] for c in completions], matches):
                     f.write(f"Content: {content}\nHas correct format: {match}\n")
 
-        # Reward is 1.0 when the condition is satisfied, else 0.0
+        # -- reward vector -------------------------------------------------------
         return [1.0 if match else 0.0 for match in matches]
+
     @staticmethod
     def iou_reward(completions, solution, **kwargs):
         """Calculate IoU reward between predicted bounding box from Qwen model and ground truth bounding box."""
@@ -211,47 +217,118 @@ class Qwen2VLModule(VLMBaseModule):
 
     @staticmethod
     def mask_iou_reward(completions, solution, **kwargs):
-        """Calculate IoU reward between predicted polygons and ground truth polygons."""
+        """
+        Compute an IoU-based reward between predicted Chebyshev-polynomial shapes
+        and ground-truth shapes.
+
+        Expected JSON inside <answer> … </answer>:
+            {"centre":[cx,cy],"coeffs":[c0,c1,…],"size":[H,W]}
+        Ground truth may optionally include "polygon"/"polygons" for legacy masks.
+        """
         import re
         import os
         import json
+        import math
+        import numpy as np
         from datetime import datetime
+        from numpy.polynomial.chebyshev import chebval
         from pycocotools import mask as maskUtils
 
-        contents = [completion[0]["content"] for completion in completions]
+        # --------------------------------------------------------------------- #
+        # Helpers
+        # --------------------------------------------------------------------- #
+        ANSWER_TAG = re.compile(r'<answer>(.*?)</answer>', re.DOTALL)
+
+        def cheby_to_polygon(centre, coeffs, n_points=72):
+            """Decode radial Chebyshev into a flat COCO polygon list [x1,y1,…]."""
+            cx, cy = centre
+            thetas = np.linspace(0, 2 * np.pi, n_points, endpoint=False, dtype=np.float32)
+            radii = chebval(np.cos(thetas), coeffs)
+            # make sure radius is non-negative
+            radii = np.maximum(radii, 0.0)
+            xs = cx + radii * np.cos(thetas)
+            ys = cy + radii * np.sin(thetas)
+            return np.stack([xs, ys], axis=1).reshape(-1).tolist()  # flatten
+
+        # --------------------------------------------------------------------- #
+        # Main loop
+        # --------------------------------------------------------------------- #
+        contents = [c[0]["content"] for c in completions]
         rewards = []
-        answer_tag_pattern = r'<answer>(.*?)</answer>'
-        for content, sol in zip(contents, solution):
-            sol = re.findall(answer_tag_pattern, sol, re.DOTALL)[-1]
-            sol = json.loads(sol.strip())
-            reward = 0.0
+
+        
+
+        for idx, (content, sol_raw) in enumerate(zip(contents, solution)):
+            reward = 0.0  # default if anything goes wrong
             try:
-                content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
-                if content_answer_match:
-                    content_answer = content_answer_match.group(1).strip()
-                    pred = json.loads(content_answer)
-                    gt_poly = sol.get("polygon") or sol.get("polygons")
-                    pred_poly = pred.get("polygon") or pred.get("polygons")
-                    size = sol.get("size")
-                    if gt_poly is not None and pred_poly is not None and size is not None:
-                        h, w = size
-                        gt_rle = maskUtils.merge(maskUtils.frPyObjects(gt_poly, h, w))
-                        pred_rle = maskUtils.merge(maskUtils.frPyObjects(pred_poly, h, w))
-                        iou = maskUtils.iou([pred_rle], [gt_rle], [False])[0][0]
-                        reward = float(iou)
-            except Exception:
-                pass
+                # ------------------ ground truth ----------------------------
+                # last <answer> … </answer> block from the GT string
+                sol_json_str = ANSWER_TAG.findall(sol_raw)[-1]
+                gt_obj = json.loads(sol_json_str.strip())
+
+                # Prefer centre/coeffs if present; fall back to polygon(s)
+                h, w = (gt_obj.get("size") or gt_obj.get("sizeHW") or [None, None])
+                if h is None or w is None:
+                    raise ValueError("Missing size in ground-truth object")
+
+                if "centre" in gt_obj and "coeffs" in gt_obj:
+                    gt_poly = cheby_to_polygon(gt_obj["centre"], gt_obj["coeffs"])
+                else:  # legacy polygon mask
+                    gt_poly = gt_obj.get("polygon") or gt_obj.get("polygons")
+                    if not gt_poly:
+                        raise ValueError("No GT polygon information")
+
+                # ------------------ prediction ------------------------------
+                pred_match = ANSWER_TAG.search(content)
+                if not pred_match:
+                    raise ValueError("No <answer> tag in completion")
+                pred_obj = json.loads(pred_match.group(1).strip())
+
+                if "centre" in pred_obj and "coeffs" in pred_obj:
+                    pred_poly = cheby_to_polygon(pred_obj["centre"], pred_obj["coeffs"])
+                else:  # legacy
+                    pred_poly = pred_obj.get("polygon") or pred_obj.get("polygons")
+                    if not pred_poly:
+                        raise ValueError("No predicted polygon information")
+
+                # clip coords to image bounds so maskUtils doesn’t throw
+                def _clip(poly, h, w):
+                    xs = poly[0::2]
+                    ys = poly[1::2]
+                    xs = [min(max(x, 0), w - 1) for x in xs]
+                    ys = [min(max(y, 0), h - 1) for y in ys]
+                    clipped = []
+                    for x, y in zip(xs, ys):
+                        clipped += [x, y]
+                    return clipped
+
+                gt_poly   = _clip(gt_poly,   h, w)
+                pred_poly = _clip(pred_poly, h, w)
+
+                # ------------------ IoU via COCO mask API -------------------
+                gt_rle   = maskUtils.merge(maskUtils.frPyObjects([gt_poly],   h, w))
+                pred_rle = maskUtils.merge(maskUtils.frPyObjects([pred_poly], h, w))
+                iou = maskUtils.iou([pred_rle], [gt_rle], [False])[0][0]
+                reward = float(iou)
+
+            except Exception as e:
+                # silently keep reward = 0.0, but still log in debug mode
+                if os.getenv("DEBUG_MODE") == "true":
+                    print(f"[mask_iou_reward] entry {idx} error:", e)
 
             rewards.append(reward)
+
+            # ------------------ optional DEBUG log -------------------------
             if os.getenv("DEBUG_MODE") == "true":
                 log_path = os.getenv("LOG_PATH")
                 current_time = datetime.now().strftime("%d-%H-%M-%S-%f")
-                if reward <= 1.0:
-                    with open(log_path, "a", encoding='utf-8') as f:
-                        f.write(f"------------- {current_time} Mask IoU reward: {reward} -------------\n")
-                        f.write(f"Content: {content}\n")
-                        f.write(f"Solution: {sol}\n")
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(f"------------- {current_time} Mask IoU reward: {reward:.4f} -------------\n")
+                    f.write(f"Content : {content}\n")
+                    f.write(f"GT      : {sol_raw}\n\n")
+
         return rewards
+
 
     @staticmethod
     def select_reward_func(func: str, task_type: str):
