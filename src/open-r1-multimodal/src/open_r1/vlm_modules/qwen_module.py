@@ -215,120 +215,143 @@ class Qwen2VLModule(VLMBaseModule):
                         f.write(f"Solution: {sol}\n") 
         return rewards
 
+        @staticmethod
     @staticmethod
     def mask_iou_reward(completions, solution, **kwargs):
         """
-        Compute an IoU-based reward between predicted Chebyshev-polynomial shapes
-        and ground-truth shapes.
+        Compute an IoU‑based reward between predicted Chebyshev‑polynomial shapes
+        and ground‑truth shapes.
 
-        Expected JSON inside <answer> … </answer>:
-            {"centre":[cx,cy],"coeffs":[c0,c1,…],"size":[H,W]}
-        Ground truth may optionally include "polygon"/"polygons" for legacy masks.
+        **Safe version** — _never raises_.  Any failure (e.g. malformed JSON, missing
+        keys, out‑of‑range indices, unavailable dependencies) yields a reward of
+        **0.0** for that particular completion.  The function therefore always
+        returns a list of length `len(completions)` and will _never_ propagate an
+        exception to the caller.
+
+        Expected JSON inside `<answer> … </answer>`:
+            {"centre": [cx, cy], "coeffs": [c0, c1, …], "size": [H, W]}
+        The ground truth may optionally include legacy keys `polygon`/`polygons`.
         """
-        import re
-        import os
-        import json
-        import math
-        import numpy as np
-        from datetime import datetime
-        from numpy.polynomial.chebyshev import chebval
-        from pycocotools import mask as maskUtils
 
-        # --------------------------------------------------------------------- #
+        # ------------------------------------------------------------------ #
+        # Early‑exit defaults and best‑effort imports
+        # ------------------------------------------------------------------ #
+        n = len(completions)
+        rewards = [0.0] * n  # ← assume failure everywhere, then overwrite per‑item
+
+        # Heavy deps may be unavailable in the runtime; if so, keep all‑zero reward
+        try:
+            import re
+            import json
+            import os
+            import numpy as np
+            from datetime import datetime
+            from numpy.polynomial.chebyshev import chebval
+            from pycocotools import mask as maskUtils
+        except Exception:
+            return rewards  # cannot evaluate IoU without deps → all zeros
+
+        # ------------------------------------------------------------------ #
         # Helpers
-        # --------------------------------------------------------------------- #
-        ANSWER_TAG = re.compile(r'<answer>(.*?)</answer>', re.DOTALL)
+        # ------------------------------------------------------------------ #
+        ANSWER_TAG = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
 
-        def cheby_to_polygon(centre, coeffs, n_points=72):
-            """Decode radial Chebyshev into a flat COCO polygon list [x1,y1,…]."""
+        def cheby_to_polygon(centre, coeffs, n_points: int = 72):
+            """Decode radial Chebyshev into a flat COCO polygon list [x1, y1, …]."""
             cx, cy = centre
             thetas = np.linspace(0, 2 * np.pi, n_points, endpoint=False, dtype=np.float32)
             radii = chebval(np.cos(thetas), coeffs)
-            # make sure radius is non-negative
-            radii = np.maximum(radii, 0.0)
+            radii = np.maximum(radii, 0.0)  # ensure non‑negative radius
             xs = cx + radii * np.cos(thetas)
             ys = cy + radii * np.sin(thetas)
-            return np.stack([xs, ys], axis=1).reshape(-1).tolist()  # flatten
+            return np.stack([xs, ys], axis=1).reshape(-1).tolist()
 
-        # --------------------------------------------------------------------- #
-        # Main loop
-        # --------------------------------------------------------------------- #
-        contents = [c[0]["content"] for c in completions]
-        rewards = []
+        def _clip(poly, h, w):
+            """Clip polygon coordinates to `[0, w−1] × [0, h−1]` to appease COCO API."""
+            xs = poly[0::2]
+            ys = poly[1::2]
+            xs = [min(max(float(x), 0.0), w - 1) for x in xs]
+            ys = [min(max(float(y), 0.0), h - 1) for y in ys]
+            clipped = []
+            for x, y in zip(xs, ys):
+                clipped += [x, y]
+            return clipped
 
-        
+        debug = os.getenv("DEBUG_MODE", "false").lower() == "true"
+        log_path = os.getenv("LOG_PATH", "mask_iou_reward.log")
 
-        for idx, (content, sol_raw) in enumerate(zip(contents, solution)):
-            reward = 0.0  # default if anything goes wrong
+        # ------------------------------------------------------------------ #
+        # Main evaluation loop — protect _every_ iteration individually
+        # ------------------------------------------------------------------ #
+        for idx in range(n):
             try:
-                # ------------------ ground truth ----------------------------
-                # last <answer> … </answer> block from the GT string
-                sol_json_str = ANSWER_TAG.findall(sol_raw)[-1]
-                gt_obj = json.loads(sol_json_str.strip())
+                # ------------------ fetch content & GT safely ------------- #
+                try:
+                    content = completions[idx][0]["content"]
+                except Exception:
+                    content = ""  # triggers reward = 0 below
 
-                # Prefer centre/coeffs if present; fall back to polygon(s)
+                try:
+                    sol_raw = solution[idx]
+                except Exception:
+                    sol_raw = ""  # missing GT → reward = 0
+
+                # ------------------ parse ground truth ------------------- #
+                try:
+                    sol_json_strs = ANSWER_TAG.findall(sol_raw)
+                    if not sol_json_strs:
+                        raise ValueError("No <answer> tag in GT")
+                    gt_obj = json.loads(sol_json_strs[-1].strip())
+                except Exception:
+                    raise  # handled by outer except → reward = 0
+
+                # GT image size (required)
                 h, w = (gt_obj.get("size") or gt_obj.get("sizeHW") or [None, None])
                 if h is None or w is None:
-                    raise ValueError("Missing size in ground-truth object")
+                    raise ValueError("Missing size in ground‑truth object")
 
+                # Ground‑truth polygon (Chebyshev or legacy polygon list)
                 if "centre" in gt_obj and "coeffs" in gt_obj:
                     gt_poly = cheby_to_polygon(gt_obj["centre"], gt_obj["coeffs"])
-                else:  # legacy polygon mask
+                else:
                     gt_poly = gt_obj.get("polygon") or gt_obj.get("polygons")
                     if not gt_poly:
                         raise ValueError("No GT polygon information")
 
-                # ------------------ prediction ------------------------------
+                # ------------------ parse prediction --------------------- #
                 pred_match = ANSWER_TAG.search(content)
                 if not pred_match:
                     raise ValueError("No <answer> tag in completion")
+
                 pred_obj = json.loads(pred_match.group(1).strip())
 
                 if "centre" in pred_obj and "coeffs" in pred_obj:
                     pred_poly = cheby_to_polygon(pred_obj["centre"], pred_obj["coeffs"])
-                else:  # legacy
+                else:
                     pred_poly = pred_obj.get("polygon") or pred_obj.get("polygons")
                     if not pred_poly:
                         raise ValueError("No predicted polygon information")
 
-                # clip coords to image bounds so maskUtils doesn’t throw
-                def _clip(poly, h, w):
-                    xs = poly[0::2]
-                    ys = poly[1::2]
-                    xs = [min(max(x, 0), w - 1) for x in xs]
-                    ys = [min(max(y, 0), h - 1) for y in ys]
-                    clipped = []
-                    for x, y in zip(xs, ys):
-                        clipped += [x, y]
-                    return clipped
+                # ------------------ IoU via COCO mask API ---------------- #
+                gt_poly_clipped   = _clip(gt_poly,   h, w)
+                pred_poly_clipped = _clip(pred_poly, h, w)
 
-                gt_poly   = _clip(gt_poly,   h, w)
-                pred_poly = _clip(pred_poly, h, w)
-
-                # ------------------ IoU via COCO mask API -------------------
-                gt_rle   = maskUtils.merge(maskUtils.frPyObjects([gt_poly],   h, w))
-                pred_rle = maskUtils.merge(maskUtils.frPyObjects([pred_poly], h, w))
+                gt_rle   = maskUtils.merge(maskUtils.frPyObjects([gt_poly_clipped],   h, w))
+                pred_rle = maskUtils.merge(maskUtils.frPyObjects([pred_poly_clipped], h, w))
                 iou = maskUtils.iou([pred_rle], [gt_rle], [False])[0][0]
-                reward = float(iou)
+
+                rewards[idx] = float(iou) if np.isfinite(iou) else 0.0
 
             except Exception as e:
-                # silently keep reward = 0.0, but still log in debug mode
-                if os.getenv("DEBUG_MODE") == "true":
-                    print(f"[mask_iou_reward] entry {idx} error:", e)
-
-            rewards.append(reward)
-
-            # ------------------ optional DEBUG log -------------------------
-            if os.getenv("DEBUG_MODE") == "true":
-                log_path = os.getenv("LOG_PATH")
-                current_time = datetime.now().strftime("%d-%H-%M-%S-%f")
-                with open(log_path, "a", encoding="utf-8") as f:
-                    f.write(f"------------- {current_time} Mask IoU reward: {reward:.4f} -------------\n")
-                    f.write(f"Content : {content}\n")
-                    f.write(f"GT      : {sol_raw}\n\n")
+                # Any failure → leave rewards[idx] at default 0.0
+                if debug:
+                    current_time = datetime.now().strftime("%d-%H-%M-%S-%f")
+                    with open(log_path, "a", encoding="utf-8") as f:
+                        f.write(f"------------- {current_time} Mask IoU reward: 0.0000 -------------\n")
+                        f.write(f"Entry #{idx} error: {e}\n\n")
+                continue  # proceed to next completion safely
 
         return rewards
-
 
     @staticmethod
     def select_reward_func(func: str, task_type: str):
