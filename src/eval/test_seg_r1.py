@@ -2,6 +2,7 @@ import os
 import json
 import random
 import re
+from PIL import Image
 
 import numpy as np
 import torch
@@ -106,10 +107,20 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
         dt_anns = []
         images = []
         for idx, (ex, out) in enumerate(zip(data, all_outputs)):
-            sol = ANSWER_RE.search(ex["conversations"][1]["value"])
-            print(sol)
-            size = sol["size"]
-            width, height = size[1], size[0]
+            sol_match = ANSWER_RE.search(ex["conversations"][1]["value"])
+            if not sol_match:
+                continue
+            sol_json = re.search(r"\{.*\}", sol_match.group(1), re.DOTALL)
+            if not sol_json:
+                continue
+            sol = json.loads(sol_json.group(0))
+
+            size = sol.get("size")
+            if size is not None:
+                width, height = size[1], size[0]
+            else:
+                image = Image.open(os.path.join(image_root, ex["image"]))
+                width, height = image.size
 
             if "centre" in sol and "coeffs" in sol:
                 gt_poly = cheby_to_polygon(sol["centre"], sol["coeffs"])
