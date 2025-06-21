@@ -106,6 +106,7 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
         dt_anns = []
         images = []
         for idx, (ex, out) in enumerate(zip(data, all_outputs)):
+            print(ex)
             sol = ex["solution"]
             size = sol["size"]
             width, height = size[1], size[0]
