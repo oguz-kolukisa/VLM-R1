@@ -107,6 +107,7 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
         images = []
         for idx, (ex, out) in enumerate(zip(data, all_outputs)):
             sol = ANSWER_RE.search(ex["conversations"][1]["value"])
+            print(sol)
             size = sol["size"]
             width, height = size[1], size[0]
 
