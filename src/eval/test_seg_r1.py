@@ -2,8 +2,12 @@ import os
 import json
 import random
 import re
+
+import numpy as np
 import torch
+from numpy.polynomial.chebyshev import chebval
 from tqdm import tqdm
+
 from qwen_vl_utils import process_vision_info
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from pycocotools import mask as maskUtils
@@ -11,17 +15,39 @@ from open_r1.utils.pycocotools.coco import COCO
 from open_r1.utils.pycocotools.cocoeval import COCOeval
 
 
+ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
+
+
+def cheby_to_polygon(centre, coeffs, n_points: int = 72):
+    """Decode radial Chebyshev coefficients into a polygon list."""
+    cx, cy = centre
+    thetas = np.linspace(0, 2 * np.pi, n_points, endpoint=False, dtype=np.float32)
+    radii = chebval(np.cos(thetas), coeffs)
+    radii = np.maximum(radii, 0.0)
+    xs = cx + radii * np.cos(thetas)
+    ys = cy + radii * np.sin(thetas)
+    poly = []
+    for x, y in zip(xs, ys):
+        poly.extend([float(x), float(y)])
+    return poly
+
+
 def extract_mask_answer(content):
-    pattern = r'```json(.*?)```'
-    json_match = re.search(pattern, content, re.DOTALL)
-    mask_json = json_match.group(1).strip() if json_match else None
-    if mask_json:
-        try:
-            data = json.loads(mask_json)[0]
-            return data.get("polygon") or data.get("polygons")
-        except Exception:
-            return None
-    return None
+    """Return polygon coordinates parsed from `<answer>` JSON."""
+    match = ANSWER_RE.search(content)
+    if not match:
+        return None
+    json_match = re.search(r"\{.*\}", match.group(1), re.DOTALL)
+    if not json_match:
+        return None
+    try:
+        obj = json.loads(json_match.group(0))
+    except Exception:
+        return None
+
+    if "centre" in obj and "coeffs" in obj:
+        return cheby_to_polygon(obj["centre"], obj["coeffs"])
+    return obj.get("polygon") or obj.get("polygons")
 
 
 def load_model(model_path, device_map):
@@ -41,19 +67,25 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
 
     for ds in test_datasets:
         print(f"Processing {ds}...")
-        ds_path = os.path.join(data_root, f"{ds}.json")
-        data = json.load(open(ds_path, "r"))
+        ds_path = os.path.join(data_root, f"{ds}.jsonl")
+        with open(ds_path, "r") as f:
+            data = [json.loads(line) for line in f]
         random.shuffle(data)
         data = data[:sample_num]
         messages = []
         for x in data:
             image_path = os.path.join(image_root, x["image"])
+            if "normal_caption" in x:
+                q_text = question_template.format(Question=x["normal_caption"])
+            else:
+                q_text = x["conversations"][0]["value"].replace("<image>", "")
+
             messages.append([
                 {
                     "role": "user",
                     "content": [
                         {"type": "image", "image": f"file://{image_path}"},
-                        {"type": "text", "text": question_template.format(Question=x["normal_caption"])}
+                        {"type": "text", "text": q_text}
                     ]
                 }
             ])
@@ -74,15 +106,25 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
         dt_anns = []
         images = []
         for idx, (ex, out) in enumerate(zip(data, all_outputs)):
-            gt_poly = ex["solution"]["polygons"]
-            size = ex["solution"]["size"]
+            sol = ex["solution"]
+            size = sol["size"]
             width, height = size[1], size[0]
-            pred_poly = extract_mask_answer(out)
-            if pred_poly is None:
-                pred_poly = []
 
-            gt_rle = maskUtils.merge(maskUtils.frPyObjects(gt_poly, height, width))
-            pred_rle = maskUtils.merge(maskUtils.frPyObjects(pred_poly, height, width)) if pred_poly else {"size": [height, width], "counts": ""}
+            if "centre" in sol and "coeffs" in sol:
+                gt_poly = cheby_to_polygon(sol["centre"], sol["coeffs"])
+            else:
+                gt_poly = sol.get("polygon") or sol.get("polygons")
+
+            pred_poly = extract_mask_answer(out) or []
+
+            gt_polys = gt_poly if isinstance(gt_poly, list) and isinstance(gt_poly[0], list) else [gt_poly]
+            gt_rle = maskUtils.merge(maskUtils.frPyObjects(gt_polys, height, width))
+
+            if pred_poly:
+                pred_polys = pred_poly if isinstance(pred_poly, list) and isinstance(pred_poly[0], list) else [pred_poly]
+                pred_rle = maskUtils.merge(maskUtils.frPyObjects(pred_polys, height, width))
+            else:
+                pred_rle = {"size": [height, width], "counts": ""}
             if isinstance(gt_rle["counts"], bytes):
                 gt_rle["counts"] = gt_rle["counts"].decode("utf-8")
             if isinstance(pred_rle.get("counts"), bytes):
