@@ -93,8 +93,9 @@ bash setup.sh
 
 #### 📚 GRPO
 
-1. Run `python src/open-r1-multimodal/local_scripts/download_coco_dataset.py --output_dir <data_dir>` to download the COCO images and polygon segmentation annotations from the official website. The converted annotations will be saved as `<data_dir>/train.jsonl` and `<data_dir>/val.jsonl`, with each line containing an `id`, `image`, and `conversations` field as described below.
-2. Change the `data_paths` and `image_folders` in the [run_scripts/run_grpo_rec.sh](run_scripts/run_grpo_rec.sh) file to point to `<data_dir>`.
+1. Run `python src/open-r1-multimodal/local_scripts/download_coco_dataset.py --output_dir <data_dir>` to download the COCO images and convert each instance mask to an 8‑term Chebyshev polynomial representation. The converted annotations will be saved as `<data_dir>/train.jsonl` and `<data_dir>/val.jsonl`, with each line containing an `id`, `image`, and `conversations` field as described below.
+2. (Optional) Preview the polygon annotations by running `python src/eval/draw_polygons.py <data_dir>/val.jsonl --image-root <data_dir> --output vis` to generate images with the masks drawn.
+3. Change the `data_paths` and `image_folders` in the [run_scripts/run_grpo_rec.sh](run_scripts/run_grpo_rec.sh) file to point to `<data_dir>`.
 
 ```bash
 # These jsonl files are included in the annotation files at step 2.
@@ -103,7 +104,7 @@ data_paths="path/to/refcoco_train.jsonl:path/to/refcocop_train.jsonl:path/to/ref
 image_folders="path/to/coco:path/to/coco:path/to/coco"
 ```
 
-3. ``bash run_scripts/run_grpo_rec.sh``
+4. ``bash run_scripts/run_grpo_rec.sh``
 
 > [!NOTE]
 > If you encounter 'CUDA out of memory' error, you can try to reduce the `per_device_train_batch_size`.
