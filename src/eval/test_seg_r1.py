@@ -154,7 +154,7 @@ if __name__ == "__main__":
     model_path = '/workspace/VLM-R1/checkpoints/rl/Qwen2.5-VL-3B-Instruct-segment/checkpoint-1300'
     data_root = '/workspace/VLM-R1/data'
     test_datasets = ['val']
-    image_root = '/workspace/VLM-R1/data/val2014'
+    image_root = '/workspace/VLM-R1/data'
     output_dir = 'logs'
     device_map = 'cuda:0'
     question_template = '{Question} First output the thinking process in <think> </think> tags and then output the final answer in <answer> </answer> tags. Output the final answer in JSON format.'
