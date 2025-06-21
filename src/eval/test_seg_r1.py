@@ -157,7 +157,7 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
 
         result_path = os.path.join(output_dir, f"{os.path.basename(model_path)}", f"{ds}_seg_r1.json")
         os.makedirs(os.path.dirname(result_path), exist_ok=True)
-        json.dump({"AP": coco_eval.stats[0]}, open(result_path, "w"), indent=2)
+        json.dump({coco_eval}, open(result_path, "w"), indent=2)
         print(f"Results saved to {result_path}")
         print('-' * 100)
 
