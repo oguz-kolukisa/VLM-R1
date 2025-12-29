@@ -106,22 +106,37 @@ class Qwen2VLModule(VLMBaseModule):
     
     @staticmethod
     def iou_reward(completions, solution, **kwargs):
-        """Calculate IoU reward between predicted bounding box from Qwen model and ground truth bounding box."""
+        """Calculate IoU reward between predicted bounding box from Qwen model and ground truth mask."""
         import re
         import os
         from datetime import datetime
         import json
-        def iou(box1, box2):
-            inter_x1 = max(box1[0], box2[0])
-            inter_y1 = max(box1[1], box2[1])
-            inter_x2 = min(box1[2]-1, box2[2]-1)
-            inter_y2 = min(box1[3]-1, box2[3]-1)
-            if inter_x1 < inter_x2 and inter_y1 < inter_y2:
-                inter = (inter_x2-inter_x1+1)*(inter_y2-inter_y1+1)
-            else:
-                inter = 0
-            union = (box1[2]-box1[0])*(box1[3]-box1[1]) + (box2[2]-box2[0])*(box2[3]-box2[1]) - inter
-            return float(inter)/union
+        import numpy as np
+        def mask_iou(pred_mask, gt_mask):
+            pred = pred_mask.astype(bool)
+            gt = gt_mask.astype(bool)
+            inter = float(np.logical_and(pred, gt).sum())
+            union = float(np.logical_or(pred, gt).sum())
+            return inter / union if union else 0.0
+
+        def load_gt_mask(mask_path):
+            mask = np.array(Image.open(mask_path).convert("L"))
+            return mask > 0
+
+        def get_sam2_predictor():
+            if not hasattr(get_sam2_predictor, "_predictor"):
+                from sam2.build_sam import build_sam2
+                from sam2.sam2_image_predictor import SAM2ImagePredictor
+
+                ckpt = os.getenv("SAM2_CKPT")
+                if not ckpt:
+                    raise ValueError("SAM2_CKPT must be set to the SAM2 checkpoint path.")
+                model_cfg = os.getenv("SAM2_MODEL", "sam2_hiera_large")
+                device = os.getenv("SAM2_DEVICE", "cuda")
+                sam2_model = build_sam2(model_cfg, ckpt, device=device)
+                get_sam2_predictor._predictor = SAM2ImagePredictor(sam2_model)
+            return get_sam2_predictor._predictor
+
         def resize_bbox(bbox, input_height, input_width, image_height, image_width):
             bbox[0] = bbox[0] / input_width * image_width
             bbox[1] = bbox[1] / input_height * image_height
@@ -141,7 +156,7 @@ class Qwen2VLModule(VLMBaseModule):
             image_width, image_height = image.size
             input_height = int(image_grid_thw[1]*14)
             input_width = int(image_grid_thw[2]*14)
-            
+
             sol = re.findall(answer_tag_pattern, sol, re.DOTALL)[-1]
             sol = json.loads(sol.strip())
             reward = 0.0
@@ -154,9 +169,19 @@ class Qwen2VLModule(VLMBaseModule):
                     if bbox_match:
                         bbox = [int(bbox_match.group(1)), int(bbox_match.group(2)), int(bbox_match.group(3)), int(bbox_match.group(4))]
                         bbox = resize_bbox(bbox, input_height, input_width, image_height, image_width)
-                        # if iou(bbox, sol) > 0.5:
-                        #     reward = 1.0
-                        reward = iou(bbox, sol)
+                        seg_mask_path = kwargs.get("seg_mask_path")
+                        if not seg_mask_path:
+                            raise ValueError("seg_mask_path is required for mask IoU reward.")
+                        predictor = get_sam2_predictor()
+                        np_image = np.array(image.convert("RGB"))
+                        predictor.set_image(np_image)
+                        masks, _, _ = predictor.predict(
+                            box=np.array(bbox, dtype=np.float32)[None, :],
+                            multimask_output=False,
+                        )
+                        pred_mask = masks[0].astype(bool)
+                        gt_mask = load_gt_mask(seg_mask_path[i])
+                        reward = mask_iou(pred_mask, gt_mask)
             except Exception:
                 pass  # Continue to next verification method if this fails
                     

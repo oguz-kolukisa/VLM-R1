@@ -5,8 +5,10 @@ import re
 import os
 from pprint import pprint
 import random
-from transformers import AutoTokenizer, AutoProcessor, AutoModelForCausalLM
+import numpy as np
+from transformers import AutoTokenizer
 from open_r1.vlm_modules.internvl_module import InvernVLModule
+from PIL import Image
 
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -48,6 +50,7 @@ DATA_ROOT = "/training/shz/dataset/vlm-r1/rec_jsons_internvl"
 
 TEST_DATASETS = ['lisa_test']
 IMAGE_ROOT = "/training/shz/dataset/lisa"
+SEG_MASK_ROOT = os.getenv("SEG_MASK_ROOT")
 
 random.seed(42)
 
@@ -80,19 +83,60 @@ def extract_bbox_answer(content):
             return bbox
     return [0, 0, 0, 0]
 
-def iou(box1, box2):
-    inter_x1 = max(box1[0], box2[0])
-    inter_y1 = max(box1[1], box2[1])
-    inter_x2 = min(box1[2]-1, box2[2]-1)
-    inter_y2 = min(box1[3]-1, box2[3]-1)
-    if inter_x1 < inter_x2 and inter_y1 < inter_y2:
-        inter = (inter_x2-inter_x1+1)*(inter_y2-inter_y1+1)
-    else:
-        inter = 0
-    union = (box1[2]-box1[0])*(box1[3]-box1[1]) + (box2[2]-box2[0])*(box2[3]-box2[1]) - inter
-    return float(inter)/union
 
-from PIL import Image
+_SAM2_PREDICTOR = None
+
+
+def get_sam2_predictor():
+    global _SAM2_PREDICTOR
+    if _SAM2_PREDICTOR is None:
+        from sam2.build_sam import build_sam2
+        from sam2.sam2_image_predictor import SAM2ImagePredictor
+
+        ckpt = os.getenv("SAM2_CKPT")
+        if not ckpt:
+            raise ValueError("SAM2_CKPT must be set for SAM-based evaluation.")
+        model_cfg = os.getenv("SAM2_MODEL", "sam2_hiera_large")
+        device = os.getenv("SAM2_DEVICE", "cuda")
+        sam2_model = build_sam2(model_cfg, ckpt, device=device)
+        _SAM2_PREDICTOR = SAM2ImagePredictor(sam2_model)
+    return _SAM2_PREDICTOR
+
+
+def resolve_seg_mask_path(mask_path):
+    if mask_path is None:
+        raise ValueError("seg_mask_path missing in dataset item for SAM-based evaluation.")
+    if os.path.isabs(mask_path):
+        return mask_path
+    if SEG_MASK_ROOT is None:
+        raise ValueError("SEG_MASK_ROOT environment variable must be set when seg_mask_path is relative.")
+    return os.path.join(SEG_MASK_ROOT, mask_path)
+
+
+def load_gt_mask(mask_path):
+    mask = np.array(Image.open(mask_path).convert("L"))
+    return mask > 0
+
+
+def mask_iou(pred_mask, gt_mask):
+    pred = pred_mask.astype(bool)
+    gt = gt_mask.astype(bool)
+    inter = float(np.logical_and(pred, gt).sum())
+    union = float(np.logical_or(pred, gt).sum())
+    return inter / union if union else 0.0
+
+
+def sam_mask_from_bbox(image_path, bbox):
+    predictor = get_sam2_predictor()
+    np_image = np.array(Image.open(image_path).convert("RGB"))
+    predictor.set_image(np_image)
+    masks, _, _ = predictor.predict(
+        box=np.array(bbox, dtype=np.float32)[None, :],
+        multimask_output=False,
+    )
+    return masks[0] > 0
+
+
 def process_vision_info(batch_messages):
     images = []
     for msg in batch_messages:
@@ -184,22 +228,33 @@ for ds in TEST_DATASETS:
 
         for input_example, model_output in zip(data, all_outputs):
             original_output = model_output
-            ground_truth = input_example['solution']
+            image_path = os.path.join(IMAGE_ROOT, input_example['image'])
+            ground_truth_bbox = input_example['solution']
+            seg_mask_path = resolve_seg_mask_path(input_example.get('seg_mask_path'))
             model_answer = extract_bbox_answer(original_output)
-            
-            # Count correct answers
+
+            gt_mask = load_gt_mask(seg_mask_path)
+            mask_score = 0.0
             correct = 0
-            if model_answer is not None and iou(model_answer, ground_truth) > 0.5:
-                correct = 1
+            if model_answer is not None:
+                try:
+                    pred_mask = sam_mask_from_bbox(image_path, model_answer)
+                    mask_score = mask_iou(pred_mask, gt_mask)
+                    if mask_score > 0.5:
+                        correct = 1
+                except Exception as exc:
+                    if rank == main_rank:
+                        print(f"SAM inference failed for {image_path}: {exc}")
             correct_number += correct
-            
-            # Create a result dictionary for this example
+
             result = {
                 'image': input_example['image'],
                 'question': input_example['problem'],
-                'ground_truth': ground_truth,
+                'ground_truth_bbox': ground_truth_bbox,
+                'seg_mask_path': seg_mask_path,
                 'model_output': original_output,
                 'extracted_answer': model_answer,
+                'mask_iou': mask_score,
                 'correct': correct
             }
             final_output.append(result)

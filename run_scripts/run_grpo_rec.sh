@@ -9,7 +9,7 @@ is_reward_customized_from_vlm_module=True
 echo "data_paths: $data_paths"
 echo "image_folders: $image_folders"
 
-export EXP_NAME="Qwen2.5-VL-3B-Instruct-rec" # TODO: change this to your own experiment name
+export EXP_NAME="${1:-${EXP_NAME:-Qwen2.5-VL-3B-Instruct-rec}}"
 TASK_TYPE="rec"
 cd ${REPO_HOME}/src/open-r1-multimodal
 

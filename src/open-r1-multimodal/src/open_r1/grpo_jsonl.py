@@ -74,6 +74,10 @@ class GRPOScriptArguments(ScriptArguments):
         default=None,
         metadata={"help": "Paths to image folders, separated by ':'"},
     )
+    seg_mask_folders: Optional[str] = field(
+        default=None,
+        metadata={"help": "Paths to segmentation mask folders, separated by ':'"},
+    )
     arrow_cache_dir: str = field(
         default=None,
         metadata={"help": "Path to arrow cache directory"},
@@ -945,9 +949,15 @@ def main(script_args, training_args, model_args):
     
     data_files = script_args.data_file_paths.split(":")
     image_folders = script_args.image_folders.split(":")
+    if script_args.seg_mask_folders is None:
+        seg_mask_folders = [None] * len(data_files)
+    else:
+        seg_mask_folders = script_args.seg_mask_folders.split(":")
 
     if len(data_files) != len(image_folders):
         raise ValueError("Number of data files must match number of image folders")
+    if len(data_files) != len(seg_mask_folders):
+        raise ValueError("Number of data files must match number of seg mask folders")
     
     if script_args.reward_method is None:
         accu_reward_methods = ["default"] * len(data_files)
@@ -960,7 +970,12 @@ def main(script_args, training_args, model_args):
         raise ValueError("Number of data files must match number of image folders")
     
     all_data = []
-    for data_file, image_folder, accu_reward_method in zip(data_files, image_folders, accu_reward_methods):
+    for data_file, image_folder, seg_mask_folder, accu_reward_method in zip(
+        data_files,
+        image_folders,
+        seg_mask_folders,
+        accu_reward_methods,
+    ):
         with open(data_file, 'r') as f:
             for line in f:
                 item = json.loads(line)
@@ -975,6 +990,11 @@ def main(script_args, training_args, model_args):
                         del item['image'] # remove the image column so that it can be loaded later
                     else:
                         raise ValueError(f"Unsupported image type: {type(item['image'])}")
+                if 'seg_mask_path' in item and item['seg_mask_path'] is not None:
+                    if not os.path.isabs(item['seg_mask_path']):
+                        if seg_mask_folder is None:
+                            raise ValueError("seg_mask_folders must be set when seg_mask_path is relative.")
+                        item['seg_mask_path'] = os.path.join(seg_mask_folder, item['seg_mask_path'])
                 # Remove immediate image loading
                 item['problem'] = item['conversations'][0]['value'].replace('<image>', '')
                 
@@ -1001,6 +1021,7 @@ def main(script_args, training_args, model_args):
                 'problem': example['problem'],
                 'solution': f"<answer> {example['solution']} </answer>",
                 'accu_reward_method': example['accu_reward_method'],
+                'seg_mask_path': example.get('seg_mask_path'),
                 'prompt': [{
                     'role': 'user',
                     'content': [
@@ -1014,6 +1035,7 @@ def main(script_args, training_args, model_args):
                 'problem': example['problem'],
                 'solution': f"<answer> {example['solution']} </answer>",
                 'accu_reward_method': example['accu_reward_method'],
+                'seg_mask_path': example.get('seg_mask_path'),
                 'prompt': [{
                     'role': 'user',
                     'content': [
