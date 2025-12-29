@@ -210,6 +210,50 @@ class InvernVLModule(VLMBaseModule):
                         f.write(f"Content: {content}\n")
                         f.write(f"Solution: {sol}\n") 
         return rewards
+
+    @staticmethod
+    def mask_iou_reward(completions, solution, **kwargs):
+        """Calculate IoU reward between predicted polygons and ground truth polygons."""
+        import re
+        import os
+        import json
+        from datetime import datetime
+        from pycocotools import mask as maskUtils
+
+        contents = [completion[0]["content"] for completion in completions]
+        rewards = []
+        answer_tag_pattern = r'<answer>(.*?)</answer>'
+        for content, sol in zip(contents, solution):
+            sol = re.findall(answer_tag_pattern, sol, re.DOTALL)[-1]
+            sol = json.loads(sol.strip())
+            reward = 0.0
+            try:
+                content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+                if content_answer_match:
+                    content_answer = content_answer_match.group(1).strip()
+                    pred = json.loads(content_answer)
+                    gt_poly = sol.get("polygon") or sol.get("polygons")
+                    pred_poly = pred.get("polygon") or pred.get("polygons")
+                    size = sol.get("size")
+                    if gt_poly is not None and pred_poly is not None and size is not None:
+                        h, w = size
+                        gt_rle = maskUtils.merge(maskUtils.frPyObjects(gt_poly, h, w))
+                        pred_rle = maskUtils.merge(maskUtils.frPyObjects(pred_poly, h, w))
+                        iou = maskUtils.iou([pred_rle], [gt_rle], [False])[0][0]
+                        reward = float(iou)
+            except Exception:
+                pass
+
+            rewards.append(reward)
+            if os.getenv("DEBUG_MODE") == "true":
+                log_path = os.getenv("LOG_PATH")
+                current_time = datetime.now().strftime("%d-%H-%M-%S-%f")
+                if reward <= 1.0:
+                    with open(log_path, "a", encoding='utf-8') as f:
+                        f.write(f"------------- {current_time} Mask IoU reward: {reward} -------------\n")
+                        f.write(f"Content: {content}\n")
+                        f.write(f"Solution: {sol}\n")
+        return rewards
     
     @staticmethod
     def select_reward_func(func: str, task_type: str):
@@ -217,6 +261,12 @@ class InvernVLModule(VLMBaseModule):
             match task_type:
                 case "rec":
                     return InvernVLModule.iou_reward
+                case _:
+                    raise ValueError(f"Unsupported reward function: {func}")
+        elif func == "mask_iou":
+            match task_type:
+                case "rec":
+                    return InvernVLModule.mask_iou_reward
                 case _:
                     raise ValueError(f"Unsupported reward function: {func}")
         elif func == "format":
