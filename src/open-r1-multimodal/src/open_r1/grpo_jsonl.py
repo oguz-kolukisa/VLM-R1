@@ -28,8 +28,10 @@ from transformers.training_args import TrainingArguments as HFTrainingArguments
 
 from torch.serialization import add_safe_globals
 from deepspeed.runtime.zero.config import ZeroStageEnum
+from deepspeed.runtime.fp16.loss_scaler import LossScaler
 
 add_safe_globals([ZeroStageEnum])
+add_safe_globals([LossScaler])
 
 if not hasattr(HFTrainingArguments, "_VALID_DICT_FIELDS"):
     HFTrainingArguments._VALID_DICT_FIELDS = []
