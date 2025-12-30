@@ -82,7 +82,7 @@ class Qwen2VLModule(VLMBaseModule):
                 )
                 return SYSTEM_PROMPT + '\n' + "{Question}"
             case "segment":
-                return "{Question} First, write your reasoning inside <think>...</think> tags. Next, write the final answer inside <answer>...</answer> tags.The content of <answer> MUST be valid JSON of the form <answer>[x1, y1, x2, y2]</answer> Use exactly those and no others."
+                return "{Question} First, write your reasoning inside <think>...</think> tags. Next, write the final answer inside <answer>...</answer> tags. The content of <answer> MUST be a valid JSON list of four numbers [x1, y1, x2, y2] in image coordinates. Use exactly that list and no other keys or text."
             case _:
                 return "{Question} First output the thinking process in <think> </think> tags and then output the final answer in <answer> </answer> tags."
             
@@ -108,11 +108,12 @@ class Qwen2VLModule(VLMBaseModule):
     @staticmethod
     def format_reward_segment(completions, **kwargs):
         """
-        Reward 1·0 if a completion contains
+        Reward 1·0 if a completion contains:
 
-            <answer> … {"centre":[cx,cy],"coeffs":[…]} … </answer>
+            <answer>[x1, y1, x2, y2]</answer>
 
-        with the structural rules above.  Anything else earns 0·0.
+        where the answer content is valid JSON and parses into a list of four
+        numeric values. Anything else earns 0·0.
         """
         import re
         import os
@@ -121,34 +122,21 @@ class Qwen2VLModule(VLMBaseModule):
 
         # -- regex helpers -------------------------------------------------------
         ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
-        JSON_RE   = re.compile(r"\{.*?\}", re.DOTALL)        # first {...} inside <answer>
 
         # -- core checker --------------------------------------------------------
-        def valid_polycoords(text: str) -> bool:
+        def valid_bbox(text: str) -> bool:
             ans_match = ANSWER_RE.search(text)
             if not ans_match:
                 return False
-
-            json_match = JSON_RE.search(ans_match.group(1))
-            if not json_match:
-                return False
             try:
-                obj = json.loads(json_match.group(0))
+                obj = json.loads(ans_match.group(1).strip())
             except json.JSONDecodeError:
                 return False
-
-            centre = obj.get("centre")
-            coeffs = obj.get("coeffs")
-
-            if (not isinstance(centre, list) or len(centre) != 2 or
-                not all(isinstance(x, (int, float)) for x in centre)):
+            if not isinstance(obj, list) or len(obj) != 4:
                 return False
-            if (not isinstance(coeffs, list) or len(coeffs) == 0 or
-                not all(isinstance(x, (int, float)) for x in coeffs)):
-                return False
-            return True
+            return all(isinstance(x, (int, float)) for x in obj)
 
-        matches = [valid_polycoords(c[0]["content"]) for c in completions]
+        matches = [valid_bbox(c[0]["content"]) for c in completions]
 
         # -- optional debugging (unchanged) --------------------------------------
         if os.getenv("DEBUG_MODE") == "true":
@@ -262,137 +250,128 @@ class Qwen2VLModule(VLMBaseModule):
     @staticmethod
     def mask_iou_reward(completions, solution, **kwargs):
         """
-        Compute an IoU‑based reward between predicted Chebyshev‑polynomial shapes
-        and ground‑truth shapes.
+        Compute an IoU‑based reward between a predicted bounding box (decoded via
+        SAM2) and a ground‑truth segmentation mask.
 
-        **Safe version** — _never raises_.  Any failure (e.g. malformed JSON, missing
-        keys, out‑of‑range indices, unavailable dependencies) yields a reward of
-        **0.0** for that particular completion.  The function therefore always
-        returns a list of length `len(completions)` and will _never_ propagate an
-        exception to the caller.
+        **Safe version** — _never raises_. Any failure (e.g. malformed JSON, missing
+        files, unavailable dependencies) yields a reward of **0.0** for that
+        particular completion. The function therefore always returns a list of
+        length `len(completions)` and will _never_ propagate an exception to the
+        caller.
 
         Expected JSON inside `<answer> … </answer>`:
-            {"centre": [cx, cy], "coeffs": [c0, c1, …], "size": [H, W]}
-        The ground truth may optionally include legacy keys `polygon`/`polygons`.
+            [x1, y1, x2, y2]
         """
-
-        # ------------------------------------------------------------------ #
-        # Early‑exit defaults and best‑effort imports
-        # ------------------------------------------------------------------ #
         n = len(completions)
-        rewards = [0.0] * n  # ← assume failure everywhere, then overwrite per‑item
+        rewards = [0.0] * n
 
-        # Heavy deps may be unavailable in the runtime; if so, keep all‑zero reward
         try:
             import re
             import json
             import os
             import numpy as np
             from datetime import datetime
-            from numpy.polynomial.chebyshev import chebval
-            from pycocotools import mask as maskUtils
         except Exception:
-            return rewards  # cannot evaluate IoU without deps → all zeros
+            return rewards
 
-        # ------------------------------------------------------------------ #
-        # Helpers
-        # ------------------------------------------------------------------ #
-        ANSWER_TAG = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
+        def mask_iou(pred_mask, gt_mask):
+            pred = pred_mask.astype(bool)
+            gt = gt_mask.astype(bool)
+            inter = float(np.logical_and(pred, gt).sum())
+            union = float(np.logical_or(pred, gt).sum())
+            return inter / union if union else 0.0
 
-        def cheby_to_polygon(centre, coeffs, n_points: int = 72):
-            """Decode radial Chebyshev into a flat COCO polygon list [x1, y1, …]."""
-            cx, cy = centre
-            thetas = np.linspace(0, 2 * np.pi, n_points, endpoint=False, dtype=np.float32)
-            radii = chebval(np.cos(thetas), coeffs)
-            radii = np.maximum(radii, 0.0)  # ensure non‑negative radius
-            xs = cx + radii * np.cos(thetas)
-            ys = cy + radii * np.sin(thetas)
-            return np.stack([xs, ys], axis=1).reshape(-1).tolist()
+        def load_gt_mask(mask_path):
+            mask = np.array(Image.open(mask_path).convert("L"))
+            return mask > 0
 
-        def _clip(poly, h, w):
-            """Clip polygon coordinates to `[0, w−1] × [0, h−1]` to appease COCO API."""
-            xs = poly[0::2]
-            ys = poly[1::2]
-            xs = [min(max(float(x), 0.0), w - 1) for x in xs]
-            ys = [min(max(float(y), 0.0), h - 1) for y in ys]
-            clipped = []
-            for x, y in zip(xs, ys):
-                clipped += [x, y]
-            return clipped
+        def get_sam2_predictor():
+            if not hasattr(get_sam2_predictor, "_predictor"):
+                from sam2.build_sam import build_sam2
+                from sam2.sam2_image_predictor import SAM2ImagePredictor
 
+                ckpt = os.getenv("SAM2_CKPT")
+                if not ckpt:
+                    raise ValueError("SAM2_CKPT must be set to the SAM2 checkpoint path.")
+                model_cfg = os.getenv("SAM2_MODEL", "sam2_hiera_large")
+                device = os.getenv("SAM2_DEVICE", "cuda")
+                sam2_model = build_sam2(model_cfg, ckpt, device=device)
+                get_sam2_predictor._predictor = SAM2ImagePredictor(sam2_model)
+            return get_sam2_predictor._predictor
+
+        def resize_bbox(bbox, input_height, input_width, image_height, image_width):
+            return [
+                bbox[0] / input_width * image_width,
+                bbox[1] / input_height * image_height,
+                bbox[2] / input_width * image_width,
+                bbox[3] / input_height * image_height,
+            ]
+
+        def clamp_bbox(bbox, image_height, image_width):
+            x1, y1, x2, y2 = bbox
+            x1 = min(max(x1, 0.0), image_width - 1)
+            x2 = min(max(x2, 0.0), image_width - 1)
+            y1 = min(max(y1, 0.0), image_height - 1)
+            y2 = min(max(y2, 0.0), image_height - 1)
+            return [x1, y1, x2, y2]
+
+        answer_tag_pattern = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
         debug = os.getenv("DEBUG_MODE", "false").lower() == "true"
         log_path = os.getenv("LOG_PATH", "mask_iou_reward.log")
 
-        # ------------------------------------------------------------------ #
-        # Main evaluation loop — protect _every_ iteration individually
-        # ------------------------------------------------------------------ #
-        for idx in range(n):
+        for i in range(n):
             try:
-                # ------------------ fetch content & GT safely ------------- #
-                try:
-                    content = completions[idx][0]["content"]
-                except Exception:
-                    content = ""  # triggers reward = 0 below
+                content = completions[i][0]["content"]
+                image_grid_thw = kwargs.get("image_grid_thw")[i]
+                image_path = kwargs.get("image_path")[i][0]
+                image = Image.open(image_path)
+                image_width, image_height = image.size
+                input_height = int(image_grid_thw[1] * 14)
+                input_width = int(image_grid_thw[2] * 14)
 
-                try:
-                    sol_raw = solution[idx]
-                except Exception:
-                    sol_raw = ""  # missing GT → reward = 0
-
-                # ------------------ parse ground truth ------------------- #
-                try:
-                    sol_json_strs = ANSWER_TAG.findall(sol_raw)
-                    if not sol_json_strs:
-                        raise ValueError("No <answer> tag in GT")
-                    gt_obj = json.loads(sol_json_strs[-1].strip())
-                except Exception:
-                    raise  # handled by outer except → reward = 0
-
-                # GT image size (required)
-                h, w = (gt_obj.get("size") or gt_obj.get("sizeHW") or [None, None])
-                if h is None or w is None:
-                    raise ValueError("Missing size in ground‑truth object")
-
-                # Ground‑truth polygon (Chebyshev or legacy polygon list)
-                if "centre" in gt_obj and "coeffs" in gt_obj:
-                    gt_poly = cheby_to_polygon(gt_obj["centre"], gt_obj["coeffs"])
-                else:
-                    gt_poly = gt_obj.get("polygon") or gt_obj.get("polygons")
-                    if not gt_poly:
-                        raise ValueError("No GT polygon information")
-
-                # ------------------ parse prediction --------------------- #
-                pred_match = ANSWER_TAG.search(content)
-                if not pred_match:
+                match = answer_tag_pattern.search(content)
+                if not match:
                     raise ValueError("No <answer> tag in completion")
+                bbox = json.loads(match.group(1).strip())
+                if not isinstance(bbox, list) or len(bbox) != 4:
+                    raise ValueError("Predicted answer must be a JSON list of four numbers")
+                if not all(isinstance(x, (int, float)) for x in bbox):
+                    raise ValueError("Predicted bbox values must be numeric")
 
-                pred_obj = json.loads(pred_match.group(1).strip())
+                bbox = resize_bbox(bbox, input_height, input_width, image_height, image_width)
+                bbox = clamp_bbox(bbox, image_height, image_width)
 
-                if "centre" in pred_obj and "coeffs" in pred_obj:
-                    pred_poly = cheby_to_polygon(pred_obj["centre"], pred_obj["coeffs"])
-                else:
-                    pred_poly = pred_obj.get("polygon") or pred_obj.get("polygons")
-                    if not pred_poly:
-                        raise ValueError("No predicted polygon information")
+                seg_mask_path = kwargs.get("seg_mask_path")
+                if not seg_mask_path:
+                    raise ValueError("seg_mask_path is required for mask IoU reward.")
 
-                # ------------------ IoU via COCO mask API ---------------- #
-                gt_poly_clipped   = _clip(gt_poly,   h, w)
-                pred_poly_clipped = _clip(pred_poly, h, w)
+                predictor = get_sam2_predictor()
+                np_image = np.array(image.convert("RGB"))
+                predictor.set_image(np_image)
+                masks, _, _ = predictor.predict(
+                    box=np.array(bbox, dtype=np.float32)[None, :],
+                    multimask_output=False,
+                )
+                pred_mask = masks[0].astype(bool)
+                gt_mask = load_gt_mask(seg_mask_path[i])
+                rewards[i] = mask_iou(pred_mask, gt_mask)
 
-                gt_rle   = maskUtils.merge(maskUtils.frPyObjects([gt_poly_clipped],   h, w))
-                pred_rle = maskUtils.merge(maskUtils.frPyObjects([pred_poly_clipped], h, w))
-                iou = maskUtils.iou([pred_rle], [gt_rle], [False])[0][0]
-
-                rewards[idx] = float(iou) if np.isfinite(iou) else 0.0
-
-            except Exception as e:
-                # Any failure → leave rewards[idx] at default 0.0
                 if debug:
                     current_time = datetime.now().strftime("%d-%H-%M-%S-%f")
                     with open(log_path, "a", encoding="utf-8") as f:
-                        f.write(f"------------- {current_time} Mask IoU reward: 0.0000 -------------\n")
-                        f.write(f"Entry #{idx} error: {e}\n\n")
-                continue  # proceed to next completion safely
+                        f.write(f"------------- {current_time} Mask IoU reward -------------\n")
+                        f.write(f"image_path: {image_path}\n")
+                        f.write(f"Content: {content}\n")
+                        f.write(f"Predicted bbox: {bbox}\n")
+                        f.write(f"Reward: {rewards[i]}\n")
+
+            except Exception as e:
+                if debug:
+                    current_time = datetime.now().strftime("%d-%H-%M-%S-%f")
+                    with open(log_path, "a", encoding="utf-8") as f:
+                        f.write(f"------------- {current_time} Mask IoU reward error -------------\n")
+                        f.write(f"Entry #{i} error: {e}\n\n")
+                continue
 
         return rewards
 
