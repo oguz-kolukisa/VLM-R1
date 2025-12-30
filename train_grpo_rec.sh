@@ -100,7 +100,7 @@ torchrun --nproc_per_node="${NUM_GPUS}" \
     --attn_implementation flash_attention_2 \
     --run_name "${EXP_NAME}" \
     --data_seed 42 \
-    --save_steps 100 \
+    --save_steps 300 \
     --num_generations 8 \
     --max_completion_length 2048 \
     --reward_funcs mask_iou format \

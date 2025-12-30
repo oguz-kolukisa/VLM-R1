@@ -26,6 +26,11 @@ from datasets import load_dataset, load_from_disk
 from transformers import Qwen2VLForConditionalGeneration
 from transformers.training_args import TrainingArguments as HFTrainingArguments
 
+from torch.serialization import add_safe_globals
+from deepspeed.runtime.zero.config import ZeroStageEnum
+
+add_safe_globals([ZeroStageEnum])
+
 if not hasattr(HFTrainingArguments, "_VALID_DICT_FIELDS"):
     HFTrainingArguments._VALID_DICT_FIELDS = []
 
