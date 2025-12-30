@@ -1,4 +1,18 @@
-from transformers import Glm4vForConditionalGeneration,AutoProcessor
+from typing import Dict, Any, Union
+from copy import deepcopy
+from PIL import Image
+import torch
+import re
+import os
+from datetime import datetime
+import json
+
+from transformers import AutoProcessor
+
+try:
+    from transformers import Glm4vForConditionalGeneration
+except ImportError:
+    Glm4vForConditionalGeneration = None
 from typing import Dict, Any, Union
 from trl.data_utils import maybe_apply_chat_template
 import torch
@@ -22,6 +36,11 @@ class GLMVModule(VLMBaseModule):
         return "glm"
 
     def get_model_class(self, model_id: str, model_init_kwargs: dict):
+        if Glm4vForConditionalGeneration is None:
+            raise ImportError(
+                "transformers.Glm4vForConditionalGeneration is unavailable. "
+                "Please upgrade transformers or remove GLM modules from your configuration."
+            )
         model_cls = Glm4vForConditionalGeneration
         return model_cls
     

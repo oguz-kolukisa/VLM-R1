@@ -12,7 +12,7 @@ MODEL_PATH=${MODEL_PATH:-"${REPO_HOME}/checkpoints/rl/${RUN_NAME}/checkpoint-${C
 DATA_ROOT=${DATA_ROOT:-"${DATA_DIR}/rec_jsons_processed"}
 IMAGE_ROOT=${IMAGE_ROOT:-"${DATA_DIR}/coco/train2014"}
 SEG_MASK_ROOT=${SEG_MASK_ROOT:-"${DATA_DIR}/grefcoco_masks"}
-SAM2_CKPT=${SAM2_CKPT:-"/path/to/sam2/checkpoint.pth"}
+SAM2_CKPT=${SAM2_CKPT:-"${REPO_HOME}/checkpoints/sam2/sam2_hiera_large.pt"}
 SAM2_MODEL=${SAM2_MODEL:-"sam2_hiera_large"}
 SAM2_DEVICE=${SAM2_DEVICE:-"cuda"}
 TEST_DATASETS=${TEST_DATASETS:-"refcoco_val,refcocop_val,refcocog_val"}
@@ -21,6 +21,9 @@ NUM_GPUS=${NUM_GPUS:-8}
 NUM_SAMPLES=${NUM_SAMPLES:-2000}
 BSZ=${BSZ:-2}
 # ----------------------------------------------------------------------------
+
+mkdir -p "${DATA_DIR}"
+mkdir -p "${REPO_HOME}/logs"
 
 export SEG_MASK_ROOT
 export SAM2_CKPT SAM2_MODEL SAM2_DEVICE

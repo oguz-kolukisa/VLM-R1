@@ -298,7 +298,7 @@ class VLMGRPOTrainer(Trainer):
             # If beta is 0.0, the reference model is not needed
             self.ref_model = None
         elif is_deepspeed_zero3_enabled():
-            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
+            self.ref_model = model_cls.from_pretrained(model_id, **model_init_kwargs)
         elif is_peft_model(model):
             # If PEFT is used, the reference model is not needed since the adapter can be disabled
             # to revert to the initial model.
@@ -325,7 +325,8 @@ class VLMGRPOTrainer(Trainer):
                 pad_token_id = processing_class.pad_token_id
 
         self.vlm_module.post_model_init(model, processing_class)
-        self.vlm_module.post_model_init(self.ref_model, processing_class)
+        if self.ref_model is not None:
+            self.vlm_module.post_model_init(self.ref_model, processing_class)
 
         # Reward functions
         if not isinstance(reward_funcs, list):

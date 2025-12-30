@@ -15,6 +15,8 @@
 import os
 import re
 import pathlib
+import sys
+import importlib.util
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional
@@ -22,6 +24,28 @@ from babel.numbers import parse_decimal
 from utils.math import compute_score
 from datasets import load_dataset, load_from_disk
 from transformers import Qwen2VLForConditionalGeneration
+from transformers.training_args import TrainingArguments as HFTrainingArguments
+
+if not hasattr(HFTrainingArguments, "_VALID_DICT_FIELDS"):
+    HFTrainingArguments._VALID_DICT_FIELDS = []
+
+import transformers.utils as hf_utils
+
+if not hasattr(hf_utils, "is_rich_available"):
+    def _is_rich_available() -> bool:
+        try:
+            return importlib.util.find_spec("rich") is not None
+        except Exception:
+            return False
+
+    hf_utils.is_rich_available = _is_rich_available
+
+PROJECT_SRC = pathlib.Path(__file__).resolve().parents[2]
+PROJECT_ROOT = PROJECT_SRC.parent
+for path in (PROJECT_SRC, PROJECT_ROOT):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
 
 from math_verify import parse, verify
 from open_r1.trainer import VLMGRPOTrainer, GRPOConfig
@@ -48,10 +72,6 @@ client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY", "sk-proj-1234567890"),
     base_url=os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 )
-
-from open_r1.qwen2_5vl_monkey_patch import monkey_patch_qwen2_5vl_flash_attn, monkey_patch_qwen2_5vl_forward, monkey_patch_torch_load
-monkey_patch_qwen2_5vl_flash_attn()    
-monkey_patch_torch_load()
 
 tokenizer = None
 
@@ -1093,5 +1113,4 @@ if __name__ == "__main__":
     script_args, training_args, model_args = parser.parse_args_and_config()
     if training_args.deepspeed and "zero3" in training_args.deepspeed:
         print("zero3 is used, qwen2_5vl forward monkey patch is applied")
-        monkey_patch_qwen2_5vl_forward()
     main(script_args, training_args, model_args)
