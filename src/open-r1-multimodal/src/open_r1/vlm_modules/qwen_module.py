@@ -290,10 +290,10 @@ class Qwen2VLModule(VLMBaseModule):
                 from sam2.build_sam import build_sam2
                 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-                ckpt = os.getenv("SAM2_CKPT")
+                ckpt = "./sam2/checkpoints/sam2.1_hiera_large.pt"
                 if not ckpt:
                     raise ValueError("SAM2_CKPT must be set to the SAM2 checkpoint path.")
-                model_cfg = os.getenv("SAM2_MODEL", "sam2_hiera_large")
+                model_cfg = "./sam2/configs/sam2_hiera_large.yaml"
                 device = os.getenv("SAM2_DEVICE", "cuda")
                 sam2_model = build_sam2(model_cfg, ckpt, device=device)
                 get_sam2_predictor._predictor = SAM2ImagePredictor(sam2_model)
