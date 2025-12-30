@@ -383,13 +383,13 @@ class Qwen2VLModule(VLMBaseModule):
                 case "rec":
                     return Qwen2VLModule.iou_reward
                 case _:
-                    raise ValueError(f"Unsupported reward function: {func}")
+                    raise ValueError(f"Unsupported task type: {func}")
         elif func == "mask_iou":
             match task_type:
                 case "segment":
                     return Qwen2VLModule.mask_iou_reward
                 case _:
-                    raise ValueError(f"Unsupported reward function: {func}")
+                    raise ValueError(f"Unsupported task type: {func}")
         elif func == "format":
             match task_type:
                 case "rec":
@@ -397,6 +397,6 @@ class Qwen2VLModule(VLMBaseModule):
                 case "segment":
                     return Qwen2VLModule.format_reward_segment
                 case _:
-                    raise ValueError(f"Unsupported reward function: {func}")
+                    raise ValueError(f"Unsupported task type: {func}")
         else:
             raise ValueError(f"Unsupported reward function: {func}")
