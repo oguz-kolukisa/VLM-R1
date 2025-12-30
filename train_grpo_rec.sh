@@ -13,7 +13,7 @@ IMAGE_FOLDERS=${IMAGE_FOLDERS:-""}
 SEG_MASK_FOLDERS=${SEG_MASK_FOLDERS:-""}
 MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen2.5-VL-3B-Instruct"}
 EXP_NAME=${EXP_NAME:-"Qwen2.5-VL-3B-Instruct-rec"}
-TASK_TYPE=${TASK_TYPE:-"rec"}
+TASK_TYPE=${TASK_TYPE:-"segmendation"}
 NUM_GPUS=${NUM_GPUS:-1}
 MASTER_PORT=${MASTER_PORT:-12349}
 # Weights & Biases logging overrides (optional)
@@ -103,7 +103,7 @@ torchrun --nproc_per_node="${NUM_GPUS}" \
     --save_steps 100 \
     --num_generations 8 \
     --max_completion_length 2048 \
-    --reward_funcs accuracy format \
+    --reward_funcs mask_iou format \
     --beta 0.04 \
     --report_to wandb \
     --dataset-name grefcoco \

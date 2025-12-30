@@ -82,7 +82,7 @@ class Qwen2VLModule(VLMBaseModule):
                 )
                 return SYSTEM_PROMPT + '\n' + "{Question}"
             case "segment":
-                return "{Question} First, write your reasoning inside <think>...</think> tags. Next, write the final answer inside <answer>...</answer> tags.The content of <answer> MUST be valid JSON of the form centre:[cx,cy],coeffs:[c0,c1,c2,...] Use exactly those two keys and no others."
+                return "{Question} First, write your reasoning inside <think>...</think> tags. Next, write the final answer inside <answer>...</answer> tags.The content of <answer> MUST be valid JSON of the form <answer>[x1, y1, x2, y2]</answer> Use exactly those and no others."
             case _:
                 return "{Question} First output the thinking process in <think> </think> tags and then output the final answer in <answer> </answer> tags."
             
@@ -400,6 +400,7 @@ class Qwen2VLModule(VLMBaseModule):
     def select_reward_func(func: str, task_type: str):
         if func == "accuracy":
             match task_type:
+                
                 case "rec":
                     return Qwen2VLModule.iou_reward
                 case _:
