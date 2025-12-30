@@ -171,15 +171,12 @@ class Qwen2VLModule(VLMBaseModule):
 
         def get_sam2_predictor():
             if not hasattr(get_sam2_predictor, "_predictor"):
-                from sam2.build_sam import build_sam2
+                from sam2.build_sam import build_sam2_hf
                 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-                ckpt = "/workspace/vlm-r1/VLM-R1/sam2/checkpoints/sam2.1_hiera_large.pt"
-                if not ckpt:
-                    raise ValueError("SAM2_CKPT must be set to the SAM2 checkpoint path.")
-                model_cfg = "sam2.1_hiera_l.yaml"
+                
                 device = os.getenv("SAM2_DEVICE", "cuda")
-                sam2_model = build_sam2(model_cfg, ckpt, device=device)
+                sam2_model = build_sam2_hf("facebook/sam2.1-hiera-large", device=device)
                 get_sam2_predictor._predictor = SAM2ImagePredictor(sam2_model)
             return get_sam2_predictor._predictor
 
@@ -287,15 +284,12 @@ class Qwen2VLModule(VLMBaseModule):
 
         def get_sam2_predictor():
             if not hasattr(get_sam2_predictor, "_predictor"):
-                from sam2.build_sam import build_sam2
+                from sam2.build_sam import build_sam2_hf
                 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-                ckpt = "/workspace/vlm-r1/VLM-R1/sam2/checkpoints/sam2.1_hiera_large.pt"
-                if not ckpt:
-                    raise ValueError("SAM2_CKPT must be set to the SAM2 checkpoint path.")
-                model_cfg = "sam2.1_hiera_l.yaml"
+                
                 device = os.getenv("SAM2_DEVICE", "cuda")
-                sam2_model = build_sam2(model_cfg, ckpt, device=device)
+                sam2_model = build_sam2_hf("facebook/sam2.1-hiera-large", device=device)
                 get_sam2_predictor._predictor = SAM2ImagePredictor(sam2_model)
             return get_sam2_predictor._predictor
 
