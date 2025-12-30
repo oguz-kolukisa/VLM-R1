@@ -26,7 +26,7 @@ WANDB_API_KEY=${WANDB_API_KEY:-""}        # optional; set to log in automaticall
 
 export REPO_HOME="$(cd "${REPO_HOME}" && pwd)"
 export PYTHONPATH="${REPO_HOME}/src:${REPO_HOME}/src/open-r1-multimodal/src:${PYTHONPATH:-}"
-export DEBUG_MODE=${DEBUG_MODE:-"false"}
+export DEBUG_MODE=${DEBUG_MODE:-"true"}
 export LOG_PATH="${REPO_HOME}/runs/${EXP_NAME}/log/debug_log.$(date +%Y-%m-%d-%H-%M-%S).txt"
 mkdir -p "$(dirname "${LOG_PATH}")"
 mkdir -p "${DATA_DIR}"
