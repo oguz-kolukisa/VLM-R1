@@ -13,7 +13,7 @@ IMAGE_FOLDERS=${IMAGE_FOLDERS:-""}
 SEG_MASK_FOLDERS=${SEG_MASK_FOLDERS:-""}
 MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen2.5-VL-3B-Instruct"}
 EXP_NAME=${EXP_NAME:-"Qwen2.5-VL-3B-Instruct-rec"}
-TASK_TYPE=${TASK_TYPE:-"segmendation"}
+TASK_TYPE=${TASK_TYPE:-"segmednt"}
 NUM_GPUS=${NUM_GPUS:-1}
 MASTER_PORT=${MASTER_PORT:-12349}
 # Weights & Biases logging overrides (optional)
