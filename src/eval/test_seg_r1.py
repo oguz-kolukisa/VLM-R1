@@ -223,8 +223,8 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
 
         mean_iou = total_iou / len(results) if results else 0.0
         accuracy = correct_number / len(results) * 100 if results else 0.0
-        print(f"\nMean IoU of {ds}: {mean_iou:.4f}")
-        print(f"Accuracy of {ds}: {accuracy:.2f}%")
+        print(f"\nMean IoU of {ds_name}: {mean_iou:.4f}")
+        print(f"Accuracy of {ds_name}: {accuracy:.2f}%")
 
         result_path = os.path.join(output_dir, f"{os.path.basename(model_path)}", f"{ds_name}_seg_r1.json")
         os.makedirs(os.path.dirname(result_path), exist_ok=True)
