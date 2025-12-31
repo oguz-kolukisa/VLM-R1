@@ -102,15 +102,46 @@ def sam_mask_from_bbox(image_path, bbox):
     return masks[0] > 0
 
 
-def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_template, output_dir, batch_size=32, sample_num=500, seed=42, device_map="cuda:0"):
+def dataset_name_from_path(path):
+    parent = os.path.basename(os.path.dirname(path))
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return parent if stem == "metadata" else stem
+
+
+def resolve_dataset_entries(test_datasets, data_root, data_paths_env):
+    if data_paths_env:
+        data_paths = [p for p in data_paths_env.split(":") if p]
+        return [(dataset_name_from_path(p), p) for p in data_paths]
+
+    dataset_entries = []
+    for ds in test_datasets:
+        ds = ds.strip()
+        if not ds:
+            continue
+        if ds.endswith(".jsonl") and os.path.isfile(ds):
+            dataset_entries.append((dataset_name_from_path(ds), ds))
+            continue
+        candidate_dir = os.path.join(data_root, ds)
+        if os.path.isdir(candidate_dir):
+            candidate_path = os.path.join(candidate_dir, "metadata.jsonl")
+        else:
+            candidate_path = os.path.join(data_root, f"{ds}.jsonl")
+        if not os.path.isfile(candidate_path):
+            raise FileNotFoundError(f"Could not find dataset file for {ds} under {data_root}")
+        dataset_entries.append((ds, candidate_path))
+    return dataset_entries
+
+
+def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_template, output_dir, batch_size=32, sample_num=500, seed=42, device_map="cuda:0", data_paths_env=None):
     random.seed(seed)
     model, processor = load_model(model_path, device_map)
 
-    for ds in test_datasets:
-        print(f"Processing {ds}...")
-        ds_path = os.path.join(data_root, f"{ds}.jsonl")
+    dataset_entries = resolve_dataset_entries(test_datasets, data_root, data_paths_env)
+
+    for ds_name, ds_path in dataset_entries:
+        print(f"Processing {ds_name}...")
         with open(ds_path, "r") as f:
-        data = [json.loads(line) for line in f]
+            data = [json.loads(line) for line in f]
         random.shuffle(data)
         data = data[:sample_num]
         messages = []
@@ -195,7 +226,7 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
         print(f"\nMean IoU of {ds}: {mean_iou:.4f}")
         print(f"Accuracy of {ds}: {accuracy:.2f}%")
 
-        result_path = os.path.join(output_dir, f"{os.path.basename(model_path)}", f"{ds}_seg_r1.json")
+        result_path = os.path.join(output_dir, f"{os.path.basename(model_path)}", f"{ds_name}_seg_r1.json")
         os.makedirs(os.path.dirname(result_path), exist_ok=True)
         with open(result_path, "w") as f:
             json.dump({
@@ -208,11 +239,30 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
 
 
 if __name__ == "__main__":
-    model_path = '/workspace/VLM-R1/checkpoints/rl/Qwen2.5-VL-3B-Instruct-segment/checkpoint-1300'
-    data_root = '/workspace/VLM-R1/data'
-    test_datasets = ['val']
-    image_root = '/workspace/VLM-R1/data'
-    output_dir = 'logs'
-    device_map = 'cuda:0'
-    question_template = '{Question} First, write your reasoning inside <think>...</think> tags. Next, write the final answer inside <answer>...</answer> tags. The content of <answer> MUST be a valid JSON list of four numbers [x1, y1, x2, y2] in image coordinates. Use exactly that list and no other keys or text.'
-    eval_seg_r1(model_path, test_datasets, data_root, image_root, question_template, output_dir, device_map=device_map)
+    model_path = os.getenv("SEG_EVAL_MODEL_PATH", "/workspace/VLM-R1/checkpoints/rl/Qwen2.5-VL-3B-Instruct-segment/checkpoint-1300")
+    data_root = os.getenv("SEG_EVAL_DATA_ROOT", "/workspace/VLM-R1/data")
+    datasets_env = os.getenv("SEG_EVAL_DATASETS", "val")
+    test_datasets = [ds.strip() for ds in datasets_env.split(",") if ds.strip()]
+    image_root = os.getenv("SEG_EVAL_IMAGE_ROOT", "/workspace/VLM-R1/data")
+    output_dir = os.getenv("SEG_EVAL_OUTPUT_DIR", "logs")
+    device_map = os.getenv("SEG_EVAL_DEVICE_MAP", "cuda:0")
+    batch_size = int(os.getenv("SEG_EVAL_BSZ", "32"))
+    sample_num = int(os.getenv("SEG_EVAL_NUM_SAMPLES", "500"))
+    question_template = os.getenv(
+        "SEG_EVAL_QUESTION_TEMPLATE",
+        "{Question} First, write your reasoning inside <think>...</think> tags. Next, write the final answer inside <answer>...</answer> tags. "
+        "The content of <answer> MUST be a valid JSON list of four numbers [x1, y1, x2, y2] in image coordinates. Use exactly that list and no other keys or text.",
+    )
+    data_paths_env = os.getenv("SEG_EVAL_DATA_PATHS")
+    eval_seg_r1(
+        model_path,
+        test_datasets,
+        data_root,
+        image_root,
+        question_template,
+        output_dir,
+        batch_size=batch_size,
+        sample_num=sample_num,
+        device_map=device_map,
+        data_paths_env=data_paths_env,
+    )
