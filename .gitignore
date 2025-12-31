@@ -189,3 +189,4 @@ runs/
 temps/
 src/open-r1-multimodal/src/open_r1/grpo_jsonl_ocr.py
 /${COCO_ROOT}
+sam2/
