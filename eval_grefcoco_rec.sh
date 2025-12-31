@@ -22,7 +22,7 @@ TEST_DATASETS=${TEST_DATASETS:-""}
 OUTPUT_DIR=${OUTPUT_DIR:-"${REPO_HOME}/logs"}
 NUM_GPUS=${NUM_GPUS:-1}
 NUM_SAMPLES=${NUM_SAMPLES:-20}
-BSZ=${BSZ:-8}
+BSZ=${BSZ:-4}
 # ----------------------------------------------------------------------------
 
 mkdir -p "${DATA_DIR}"
