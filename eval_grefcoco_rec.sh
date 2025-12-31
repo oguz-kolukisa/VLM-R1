@@ -25,6 +25,16 @@ BSZ=${BSZ:-2}
 mkdir -p "${DATA_DIR}"
 mkdir -p "${REPO_HOME}/logs"
 
+if [[ ! -f "${SAM2_CKPT}" ]]; then
+  echo "SAM2 checkpoint not found at ${SAM2_CKPT}. Set SAM2_CKPT to a valid file." >&2
+  exit 1
+fi
+
+if [[ ! -d "${SEG_MASK_ROOT}" ]]; then
+  echo "SEG_MASK_ROOT not found at ${SEG_MASK_ROOT}. Set SEG_MASK_ROOT to a valid directory." >&2
+  exit 1
+fi
+
 export SEG_MASK_ROOT
 export SAM2_CKPT SAM2_MODEL SAM2_DEVICE
 export REC_EVAL_STEPS="${CHECKPOINT_STEPS}"

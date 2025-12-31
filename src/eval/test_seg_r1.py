@@ -6,49 +6,39 @@ from PIL import Image
 
 import numpy as np
 import torch
-from numpy.polynomial.chebyshev import chebval
 from tqdm import tqdm
 
 from qwen_vl_utils import process_vision_info
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
-from pycocotools import mask as maskUtils
-from open_r1.utils.pycocotools.coco import COCO
-from open_r1.utils.pycocotools.cocoeval import COCOeval
 
 
 ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
 
 
-def cheby_to_polygon(centre, coeffs, n_points: int = 72):
-    """Decode radial Chebyshev coefficients into a polygon list."""
-    cx, cy = centre
-    thetas = np.linspace(0, 2 * np.pi, n_points, endpoint=False, dtype=np.float32)
-    radii = chebval(np.cos(thetas), coeffs)
-    radii = np.maximum(radii, 0.0)
-    xs = cx + radii * np.cos(thetas)
-    ys = cy + radii * np.sin(thetas)
-    poly = []
-    for x, y in zip(xs, ys):
-        poly.extend([float(x), float(y)])
-    return poly
-
-
-def extract_mask_answer(content):
-    """Return polygon coordinates parsed from `<answer>` JSON."""
+def extract_bbox_answer(content):
+    """Return a [x1, y1, x2, y2] list parsed from `<answer>` JSON."""
     match = ANSWER_RE.search(content)
     if not match:
         return None
-    json_match = re.search(r"\{.*\}", match.group(1), re.DOTALL)
-    if not json_match:
-        return None
+    answer_text = match.group(1).strip()
     try:
-        obj = json.loads(json_match.group(0))
-    except Exception:
-        return None
+        obj = json.loads(answer_text)
+    except json.JSONDecodeError:
+        obj = None
+    if isinstance(obj, list) and len(obj) == 4 and all(isinstance(x, (int, float)) for x in obj):
+        return [float(x) for x in obj]
+    bbox_match = re.search(r"\[(\d+(?:\.\d+)?),\s*(\d+(?:\.\d+)?),\s*(\d+(?:\.\d+)?),\s*(\d+(?:\.\d+)?)\]", answer_text)
+    if bbox_match:
+        return [float(bbox_match.group(i)) for i in range(1, 5)]
+    return None
 
-    if "centre" in obj and "coeffs" in obj:
-        return cheby_to_polygon(obj["centre"], obj["coeffs"])
-    return obj.get("polygon") or obj.get("polygons")
+
+def resize_bbox(bbox, input_height, input_width, image_height, image_width):
+    bbox[0] = bbox[0] / input_width * image_width
+    bbox[1] = bbox[1] / input_height * image_height
+    bbox[2] = bbox[2] / input_width * image_width
+    bbox[3] = bbox[3] / input_height * image_height
+    return bbox
 
 
 def load_model(model_path, device_map):
@@ -62,6 +52,56 @@ def load_model(model_path, device_map):
     return model, processor
 
 
+_SAM2_PREDICTOR = None
+
+
+def get_sam2_predictor():
+    global _SAM2_PREDICTOR
+    if _SAM2_PREDICTOR is None:
+        from sam2.build_sam import build_sam2_hf
+        from sam2.sam2_image_predictor import SAM2ImagePredictor
+
+        device = os.getenv("SAM2_DEVICE", "cuda")
+        sam2_model = build_sam2_hf("facebook/sam2.1-hiera-large", device=device)
+        _SAM2_PREDICTOR = SAM2ImagePredictor(sam2_model)
+    return _SAM2_PREDICTOR
+
+
+def resolve_seg_mask_path(mask_path):
+    if mask_path is None:
+        raise ValueError("seg_mask_path missing in dataset item for SAM-based evaluation.")
+    if os.path.isabs(mask_path):
+        return mask_path
+    seg_mask_root = os.getenv("SEG_MASK_ROOT")
+    if seg_mask_root is None:
+        raise ValueError("SEG_MASK_ROOT environment variable must be set when seg_mask_path is relative.")
+    return os.path.join(seg_mask_root, mask_path)
+
+
+def load_gt_mask(mask_path):
+    mask = np.array(Image.open(mask_path).convert("L"))
+    return mask > 0
+
+
+def mask_iou(pred_mask, gt_mask):
+    pred = pred_mask.astype(bool)
+    gt = gt_mask.astype(bool)
+    inter = float(np.logical_and(pred, gt).sum())
+    union = float(np.logical_or(pred, gt).sum())
+    return inter / union if union else 0.0
+
+
+def sam_mask_from_bbox(image_path, bbox):
+    predictor = get_sam2_predictor()
+    np_image = np.array(Image.open(image_path).convert("RGB"))
+    predictor.set_image(np_image)
+    masks, _, _ = predictor.predict(
+        box=np.array(bbox, dtype=np.float32)[None, :],
+        multimask_output=False,
+    )
+    return masks[0] > 0
+
+
 def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_template, output_dir, batch_size=32, sample_num=500, seed=42, device_map="cuda:0"):
     random.seed(seed)
     model, processor = load_model(model_path, device_map)
@@ -70,7 +110,7 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
         print(f"Processing {ds}...")
         ds_path = os.path.join(data_root, f"{ds}.jsonl")
         with open(ds_path, "r") as f:
-            data = [json.loads(line) for line in f]
+        data = [json.loads(line) for line in f]
         random.shuffle(data)
         data = data[:sample_num]
         messages = []
@@ -78,6 +118,8 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
             image_path = os.path.join(image_root, x["image"])
             if "normal_caption" in x:
                 q_text = question_template.format(Question=x["normal_caption"])
+            elif "problem" in x:
+                q_text = question_template.format(Question=x["problem"])
             else:
                 q_text = x["conversations"][0]["value"].replace("<image>", "")
 
@@ -101,63 +143,66 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
             generated_ids = model.generate(**inputs, use_cache=True, max_new_tokens=256, do_sample=False)
             generated_ids_trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
             batch_output_text = processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
-            all_outputs.extend(batch_output_text)
+            for idx, output_text in enumerate(batch_output_text):
+                input_height = int(inputs["image_grid_thw"][idx][1] * 14)
+                input_width = int(inputs["image_grid_thw"][idx][2] * 14)
+                all_outputs.append({
+                    "text": output_text,
+                    "input_height": input_height,
+                    "input_width": input_width,
+                })
 
-        gt_anns = []
-        dt_anns = []
-        images = []
-        for idx, (ex, out) in enumerate(zip(data, all_outputs)):
-            sol_match = ANSWER_RE.search(ex["conversations"][1]["value"])
-            if not sol_match:
-                continue
-            sol_json = re.search(r"\{.*\}", sol_match.group(1), re.DOTALL)
-            if not sol_json:
-                continue
-            sol = json.loads(sol_json.group(0))
+        results = []
+        total_iou = 0.0
+        correct_number = 0
+        for ex, out in zip(data, all_outputs):
+            image_path = os.path.join(image_root, ex["image"])
+            image = Image.open(image_path)
+            image_width, image_height = image.size
 
-            size = sol.get("size")
-            if size is not None:
-                width, height = size[1], size[0]
-            else:
-                image = Image.open(os.path.join(image_root, ex["image"]))
-                width, height = image.size
+            pred_bbox = extract_bbox_answer(out["text"]) or [0.0, 0.0, 0.0, 0.0]
+            resized_bbox = resize_bbox(pred_bbox, out["input_height"], out["input_width"], image_height, image_width)
 
-            if "centre" in sol and "coeffs" in sol:
-                gt_poly = cheby_to_polygon(sol["centre"], sol["coeffs"])
-            else:
-                gt_poly = sol.get("polygon") or sol.get("polygons")
+            seg_mask_path = resolve_seg_mask_path(ex.get("seg_mask_path"))
+            gt_mask = load_gt_mask(seg_mask_path)
 
-            pred_poly = extract_mask_answer(out) or []
+            mask_score = 0.0
+            correct = 0
+            try:
+                pred_mask = sam_mask_from_bbox(image_path, resized_bbox)
+                mask_score = mask_iou(pred_mask, gt_mask)
+                if mask_score > 0.5:
+                    correct = 1
+            except Exception as exc:
+                print(f"SAM inference failed for {image_path}: {exc}")
 
-            gt_polys = gt_poly if isinstance(gt_poly, list) and isinstance(gt_poly[0], list) else [gt_poly]
-            gt_rle = maskUtils.merge(maskUtils.frPyObjects(gt_polys, height, width))
+            total_iou += mask_score
+            correct_number += correct
+            results.append({
+                "image": ex["image"],
+                "question": ex.get("normal_caption") or ex.get("problem") or ex["conversations"][0]["value"],
+                "seg_mask_path": seg_mask_path,
+                "model_output": out["text"],
+                "input_size": (out["input_height"], out["input_width"]),
+                "image_size": (image_height, image_width),
+                "extracted_answer": resized_bbox,
+                "mask_iou": mask_score,
+                "correct": correct,
+            })
 
-            if pred_poly:
-                pred_polys = pred_poly if isinstance(pred_poly, list) and isinstance(pred_poly[0], list) else [pred_poly]
-                pred_rle = maskUtils.merge(maskUtils.frPyObjects(pred_polys, height, width))
-            else:
-                pred_rle = {"size": [height, width], "counts": ""}
-            if isinstance(gt_rle["counts"], bytes):
-                gt_rle["counts"] = gt_rle["counts"].decode("utf-8")
-            if isinstance(pred_rle.get("counts"), bytes):
-                pred_rle["counts"] = pred_rle["counts"].decode("utf-8")
-
-            images.append({"id": idx, "width": width, "height": height})
-            gt_anns.append({"id": idx, "image_id": idx, "category_id": 1, "segmentation": gt_rle, "area": float(maskUtils.area(gt_rle)), "iscrowd": 0})
-            dt_anns.append({"id": idx, "image_id": idx, "category_id": 1, "segmentation": pred_rle, "score": 1.0})
-
-        coco_gt = COCO()
-        coco_gt.dataset = {"images": images, "annotations": gt_anns, "categories": [{"id": 1, "name": "segm"}]}
-        coco_gt.createIndex()
-        coco_dt = coco_gt.loadRes(dt_anns)
-        coco_eval = COCOeval(coco_gt, coco_dt, iouType='segm')
-        coco_eval.evaluate()
-        coco_eval.accumulate()
-        coco_eval.summarize()
+        mean_iou = total_iou / len(results) if results else 0.0
+        accuracy = correct_number / len(results) * 100 if results else 0.0
+        print(f"\nMean IoU of {ds}: {mean_iou:.4f}")
+        print(f"Accuracy of {ds}: {accuracy:.2f}%")
 
         result_path = os.path.join(output_dir, f"{os.path.basename(model_path)}", f"{ds}_seg_r1.json")
         os.makedirs(os.path.dirname(result_path), exist_ok=True)
-        json.dump(coco_eval, open(result_path, "w"), indent=2)
+        with open(result_path, "w") as f:
+            json.dump({
+                "mean_iou": mean_iou,
+                "accuracy": accuracy,
+                "results": results,
+            }, f, indent=2)
         print(f"Results saved to {result_path}")
         print('-' * 100)
 
@@ -169,5 +214,5 @@ if __name__ == "__main__":
     image_root = '/workspace/VLM-R1/data'
     output_dir = 'logs'
     device_map = 'cuda:0'
-    question_template = '{Question} First output the thinking process in <think> </think> tags and then output the final answer in <answer> </answer> tags. Output the final answer in JSON format.'
+    question_template = '{Question} First, write your reasoning inside <think>...</think> tags. Next, write the final answer inside <answer>...</answer> tags. The content of <answer> MUST be a valid JSON list of four numbers [x1, y1, x2, y2] in image coordinates. Use exactly that list and no other keys or text.'
     eval_seg_r1(model_path, test_datasets, data_root, image_root, question_template, output_dir, device_map=device_map)
