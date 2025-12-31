@@ -12,6 +12,7 @@ RUN_NAME=${RUN_NAME:-"Qwen2.5-VL-3B-Instruct-seg"}
 CHECKPOINT_STEPS=${CHECKPOINT_STEPS:-100}
 MODEL_PATH=${MODEL_PATH:-"${REPO_HOME}/checkpoints/rl/${RUN_NAME}/checkpoint-${CHECKPOINT_STEPS}"}
 MODEL_PATH="okolukisa1/Qwen2.5-VL-3B-Instruct-rec-seg"
+MODEL_PATH="/workspace/vlm-r1/VLM-R1/checkpoints/rl/Qwen2.5-VL-3B-Instruct-rec/checkpoint-900"
 IMAGE_ROOT=${IMAGE_ROOT:-"${COCO_IMAGE_ROOT}"}
 SEG_MASK_ROOT=${SEG_MASK_ROOT:-"${REFCOCO_EXPORT_BASE}"}
 SAM2_CKPT=${SAM2_CKPT:-"${REPO_HOME}/checkpoints/sam2/sam2_hiera_large.pt"}
