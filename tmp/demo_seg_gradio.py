@@ -12,7 +12,8 @@ from PIL import Image
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, os.pardir))
 OPEN_R1_SRC = os.path.join(REPO_ROOT, "src", "open-r1-multimodal", "src")
 if OPEN_R1_SRC not in os.sys.path:
     os.sys.path.append(OPEN_R1_SRC)
