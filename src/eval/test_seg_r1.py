@@ -167,6 +167,7 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
         all_outputs = []
         for i in tqdm(range(0, len(messages), batch_size)):
             batch_messages = messages[i:i + batch_size]
+            print(batch_messages)
             text = [processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True) for msg in batch_messages]
             image_inputs, video_inputs = process_vision_info(batch_messages)
             inputs = processor(text=text, images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
@@ -239,7 +240,7 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
 
 
 if __name__ == "__main__":
-    model_path = os.getenv("SEG_EVAL_MODEL_PATH", "/workspace/VLM-R1/checkpoints/rl/Qwen2.5-VL-3B-Instruct-segment/checkpoint-1300")
+    model_path = os.getenv("SEG_EVAL_MODEL_PATH", "/workspace/VLM-R1/checkpoints/rl/Qwen2.5-VL-3B-Instruct-segment/checkpoint-900")
     data_root = os.getenv("SEG_EVAL_DATA_ROOT", "/workspace/VLM-R1/data")
     datasets_env = os.getenv("SEG_EVAL_DATASETS", "val")
     test_datasets = [ds.strip() for ds in datasets_env.split(",") if ds.strip()]
