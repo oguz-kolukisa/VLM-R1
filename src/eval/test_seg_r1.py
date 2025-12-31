@@ -219,7 +219,6 @@ def eval_seg_r1(
             batch_indices = list(range(i, i + len(batch_messages)))
             text = [processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True) for msg in batch_messages]
             image_inputs, video_inputs = process_vision_info(batch_messages)
-            print(text)
             inputs = processor(text=text, images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
             inputs = repeat_batch_encoding(inputs, num_generations)
             inputs = inputs.to(device_map)
