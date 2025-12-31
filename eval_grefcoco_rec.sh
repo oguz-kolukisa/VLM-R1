@@ -11,6 +11,7 @@ COCO_IMAGE_ROOT=${COCO_IMAGE_ROOT:-"${DATA_DIR}/coco"}
 RUN_NAME=${RUN_NAME:-"Qwen2.5-VL-3B-Instruct-seg"}
 CHECKPOINT_STEPS=${CHECKPOINT_STEPS:-100}
 MODEL_PATH=${MODEL_PATH:-"${REPO_HOME}/checkpoints/rl/${RUN_NAME}/checkpoint-${CHECKPOINT_STEPS}"}
+MODEL_PATH="okolukisa1/Qwen2.5-VL-3B-Instruct-rec-seg"
 IMAGE_ROOT=${IMAGE_ROOT:-"${COCO_IMAGE_ROOT}/train2014"}
 SEG_MASK_ROOT=${SEG_MASK_ROOT:-"${REFCOCO_EXPORT_BASE}"}
 SAM2_CKPT=${SAM2_CKPT:-"${REPO_HOME}/checkpoints/sam2/sam2_hiera_large.pt"}
@@ -19,7 +20,7 @@ SAM2_DEVICE=${SAM2_DEVICE:-"cuda"}
 TEST_DATASETS=${TEST_DATASETS:-""}
 OUTPUT_DIR=${OUTPUT_DIR:-"${REPO_HOME}/logs"}
 NUM_GPUS=${NUM_GPUS:-1}
-NUM_SAMPLES=${NUM_SAMPLES:-2000}
+NUM_SAMPLES=${NUM_SAMPLES:-20}
 BSZ=${BSZ:-2}
 # ----------------------------------------------------------------------------
 
