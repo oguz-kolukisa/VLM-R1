@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 import gradio as gr
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 
@@ -90,6 +90,17 @@ def apply_mask(image: Image.Image, mask: np.ndarray, color: Tuple[int, int, int]
     return Image.fromarray(overlay)
 
 
+def draw_bbox(image: Image.Image, bbox: Tuple[float, float, float, float], color: Tuple[int, int, int] = (0, 255, 0), width: int = 4):
+    """Draw the bounding box onto the image and return the result."""
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    draw = ImageDraw.Draw(image)
+    x1, y1, x2, y2 = bbox
+    for offset in range(width):
+        draw.rectangle((x1 - offset, y1 - offset, x2 + offset, y2 + offset), outline=color)
+    return image
+
+
 def predict(image: Image.Image, prompt: str) -> Tuple[Optional[Image.Image], str]:
     if image is None or not prompt:
         return None, "Please provide an image and a prompt."
@@ -155,6 +166,7 @@ def predict(image: Image.Image, prompt: str) -> Tuple[Optional[Image.Image], str
     )
     mask = masks[0] > 0
     overlay = apply_mask(image, mask)
+    overlay = draw_bbox(overlay, resized_bbox)
 
     return overlay, f"Model output:\n{output_text}\n\nBBox: {resized_bbox}"
 
