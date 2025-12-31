@@ -21,7 +21,7 @@ SAM2_DEVICE=${SAM2_DEVICE:-"cuda"}
 TEST_DATASETS=${TEST_DATASETS:-""}
 OUTPUT_DIR=${OUTPUT_DIR:-"${REPO_HOME}/logs"}
 NUM_GPUS=${NUM_GPUS:-1}
-NUM_SAMPLES=${NUM_SAMPLES:-20}
+NUM_SAMPLES=${NUM_SAMPLES:-200}
 BSZ=${BSZ:-4}
 # ----------------------------------------------------------------------------
 
