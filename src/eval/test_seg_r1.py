@@ -1,7 +1,9 @@
 import os
+import sys
 import json
 import random
 import re
+from typing import Iterable, List
 from PIL import Image
 
 import numpy as np
@@ -11,8 +13,35 @@ from tqdm import tqdm
 from qwen_vl_utils import process_vision_info
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 
+# Ensure we can import the shared VLM module definitions used during GRPO.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OPEN_R1_SRC = os.path.join(REPO_ROOT, "open-r1-multimodal", "src")
+if OPEN_R1_SRC not in sys.path:
+    sys.path.append(OPEN_R1_SRC)
+
+from open_r1.vlm_modules.qwen_module import Qwen2VLModule  # noqa: E402
+
 
 ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
+
+
+def strtobool_env(value: str) -> bool:
+    return value.lower() in ("1", "true", "yes", "on")
+
+
+def repeat_indices(indices: Iterable[int], repeat: int) -> List[int]:
+    return [idx for idx in indices for _ in range(repeat)]
+
+
+def repeat_batch_encoding(batch_encoding, repeat: int):
+    if repeat == 1:
+        return batch_encoding
+    for key, value in list(batch_encoding.items()):
+        if isinstance(value, torch.Tensor):
+            batch_encoding[key] = value.repeat_interleave(repeat, dim=0)
+        elif isinstance(value, list):
+            batch_encoding[key] = [elem for elem in value for _ in range(repeat)]
+    return batch_encoding
 
 
 def extract_bbox_answer(content):
@@ -132,8 +161,28 @@ def resolve_dataset_entries(test_datasets, data_root, data_paths_env):
     return dataset_entries
 
 
-def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_template, output_dir, batch_size=32, sample_num=500, seed=42, device_map="cuda:0", data_paths_env=None):
+def eval_seg_r1(
+    model_path,
+    test_datasets,
+    data_root,
+    image_root,
+    question_template,
+    output_dir,
+    batch_size=32,
+    sample_num=500,
+    seed=42,
+    device_map="cuda:0",
+    data_paths_env=None,
+    num_generations=8,
+    do_sample=True,
+    temperature=1.0,
+    top_p=1.0,
+    max_new_tokens=2048,
+):
     random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
     model, processor = load_model(model_path, device_map)
 
     dataset_entries = resolve_dataset_entries(test_datasets, data_root, data_paths_env)
@@ -164,21 +213,31 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
                 }
             ])
 
-        all_outputs = []
+        outputs_by_example = [[] for _ in data]
         for i in tqdm(range(0, len(messages), batch_size)):
             batch_messages = messages[i:i + batch_size]
-            print(batch_messages)
+            batch_indices = list(range(i, i + len(batch_messages)))
             text = [processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True) for msg in batch_messages]
             image_inputs, video_inputs = process_vision_info(batch_messages)
             inputs = processor(text=text, images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
+            inputs = repeat_batch_encoding(inputs, num_generations)
             inputs = inputs.to(device_map)
-            generated_ids = model.generate(**inputs, use_cache=True, max_new_tokens=256, do_sample=False)
+            repeated_indices = repeat_indices(batch_indices, num_generations)
+            generation_kwargs = {
+                "use_cache": True,
+                "max_new_tokens": max_new_tokens,
+                "do_sample": do_sample,
+                "temperature": temperature,
+                "top_p": top_p,
+            }
+            generated_ids = model.generate(**inputs, **generation_kwargs)
             generated_ids_trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
             batch_output_text = processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
             for idx, output_text in enumerate(batch_output_text):
-                input_height = int(inputs["image_grid_thw"][idx][1] * 14)
-                input_width = int(inputs["image_grid_thw"][idx][2] * 14)
-                all_outputs.append({
+                input_height = int(inputs["image_grid_thw"][idx][1].item() * 14)
+                input_width = int(inputs["image_grid_thw"][idx][2].item() * 14)
+                example_idx = repeated_indices[idx]
+                outputs_by_example[example_idx].append({
                     "text": output_text,
                     "input_height": input_height,
                     "input_width": input_width,
@@ -187,40 +246,45 @@ def eval_seg_r1(model_path, test_datasets, data_root, image_root, question_templ
         results = []
         total_iou = 0.0
         correct_number = 0
-        for ex, out in zip(data, all_outputs):
+        for ex, outs in zip(data, outputs_by_example):
             image_path = os.path.join(image_root, ex["image"])
             image = Image.open(image_path)
             image_width, image_height = image.size
 
-            pred_bbox = extract_bbox_answer(out["text"]) or [0.0, 0.0, 0.0, 0.0]
-            resized_bbox = resize_bbox(pred_bbox, out["input_height"], out["input_width"], image_height, image_width)
-
             seg_mask_path = resolve_seg_mask_path(ex.get("seg_mask_path"))
             gt_mask = load_gt_mask(seg_mask_path)
 
-            mask_score = 0.0
-            correct = 0
-            try:
-                pred_mask = sam_mask_from_bbox(image_path, resized_bbox)
-                mask_score = mask_iou(pred_mask, gt_mask)
-                if mask_score > 0.5:
-                    correct = 1
-            except Exception as exc:
-                print(f"SAM inference failed for {image_path}: {exc}")
+            if not outs:
+                outs = [{"text": "", "input_height": 1.0, "input_width": 1.0}]
 
-            total_iou += mask_score
-            correct_number += correct
-            results.append({
-                "image": ex["image"],
-                "question": ex.get("normal_caption") or ex.get("problem") or ex["conversations"][0]["value"],
-                "seg_mask_path": seg_mask_path,
-                "model_output": out["text"],
-                "input_size": (out["input_height"], out["input_width"]),
-                "image_size": (image_height, image_width),
-                "extracted_answer": resized_bbox,
-                "mask_iou": mask_score,
-                "correct": correct,
-            })
+            for gen_idx, out in enumerate(outs):
+                pred_bbox = extract_bbox_answer(out["text"]) or [0.0, 0.0, 0.0, 0.0]
+                resized_bbox = resize_bbox(pred_bbox, out["input_height"], out["input_width"], image_height, image_width)
+
+                mask_score = 0.0
+                correct = 0
+                try:
+                    pred_mask = sam_mask_from_bbox(image_path, resized_bbox)
+                    mask_score = mask_iou(pred_mask, gt_mask)
+                    if mask_score > 0.5:
+                        correct = 1
+                except Exception as exc:
+                    print(f"SAM inference failed for {image_path}: {exc}")
+
+                total_iou += mask_score
+                correct_number += correct
+                results.append({
+                    "image": ex["image"],
+                    "question": ex.get("normal_caption") or ex.get("problem") or ex["conversations"][0]["value"],
+                    "seg_mask_path": seg_mask_path,
+                    "model_output": out["text"],
+                    "input_size": (out["input_height"], out["input_width"]),
+                    "image_size": (image_height, image_width),
+                    "extracted_answer": resized_bbox,
+                    "mask_iou": mask_score,
+                    "correct": correct,
+                    "generation_index": gen_idx,
+                })
 
         mean_iou = total_iou / len(results) if results else 0.0
         accuracy = correct_number / len(results) * 100 if results else 0.0
@@ -249,7 +313,15 @@ if __name__ == "__main__":
     device_map = os.getenv("SEG_EVAL_DEVICE_MAP", "cuda:0")
     batch_size = int(os.getenv("SEG_EVAL_BSZ", "32"))
     sample_num = int(os.getenv("SEG_EVAL_NUM_SAMPLES", "500"))
-    question_template = "{Question} First, write your reasoning inside <think>...</think> tags. Next, write the final answer inside <answer>...</answer> tags. The content of <answer> MUST be a valid JSON list of four numbers [x1, y1, x2, y2] in image coordinates. Use exactly that list and no other keys or text."
+    num_generations = int(os.getenv("SEG_EVAL_NUM_GENERATIONS", "8"))
+    do_sample = strtobool_env(os.getenv("SEG_EVAL_DO_SAMPLE", "true"))
+    temperature = float(os.getenv("SEG_EVAL_TEMPERATURE", "1.0"))
+    top_p = float(os.getenv("SEG_EVAL_TOP_P", "1.0"))
+    max_new_tokens = int(os.getenv("SEG_EVAL_MAX_NEW_TOKENS", "2048"))
+    question_template = os.getenv(
+        "SEG_EVAL_QUESTION_TEMPLATE",
+        Qwen2VLModule.get_question_template(task_type="segment"),
+    )
     data_paths_env = os.getenv("SEG_EVAL_DATA_PATHS")
     eval_seg_r1(
         model_path,
@@ -262,4 +334,9 @@ if __name__ == "__main__":
         sample_num=sample_num,
         device_map=device_map,
         data_paths_env=data_paths_env,
+        num_generations=num_generations,
+        do_sample=do_sample,
+        temperature=temperature,
+        top_p=top_p,
+        max_new_tokens=max_new_tokens,
     )
