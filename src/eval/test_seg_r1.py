@@ -248,11 +248,7 @@ if __name__ == "__main__":
     device_map = os.getenv("SEG_EVAL_DEVICE_MAP", "cuda:0")
     batch_size = int(os.getenv("SEG_EVAL_BSZ", "32"))
     sample_num = int(os.getenv("SEG_EVAL_NUM_SAMPLES", "500"))
-    question_template = os.getenv(
-        "SEG_EVAL_QUESTION_TEMPLATE",
-        "{Question} First, write your reasoning inside <think>...</think> tags. Next, write the final answer inside <answer>...</answer> tags. "
-        "The content of <answer> MUST be a valid JSON list of four numbers [x1, y1, x2, y2] in image coordinates. Use exactly that list and no other keys or text.",
-    )
+    question_template = "{Question} First, write your reasoning inside <think>...</think> tags. Next, write the final answer inside <answer>...</answer> tags. The content of <answer> MUST be a valid JSON list of four numbers [x1, y1, x2, y2] in image coordinates. Use exactly that list and no other keys or text."
     data_paths_env = os.getenv("SEG_EVAL_DATA_PATHS")
     eval_seg_r1(
         model_path,

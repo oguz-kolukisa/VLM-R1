@@ -18,7 +18,7 @@ SAM2_MODEL=${SAM2_MODEL:-"sam2_hiera_large"}
 SAM2_DEVICE=${SAM2_DEVICE:-"cuda"}
 TEST_DATASETS=${TEST_DATASETS:-""}
 OUTPUT_DIR=${OUTPUT_DIR:-"${REPO_HOME}/logs"}
-NUM_GPUS=${NUM_GPUS:-8}
+NUM_GPUS=${NUM_GPUS:-1}
 NUM_SAMPLES=${NUM_SAMPLES:-2000}
 BSZ=${BSZ:-2}
 # ----------------------------------------------------------------------------
