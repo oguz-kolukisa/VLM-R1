@@ -202,7 +202,7 @@ def eval_seg_r1(
                 q_text = question_template.format(Question=x["problem"])
             else:
                 q_text = x["conversations"][0]["value"].replace("<image>", "")
-            q_text = question_template.format(Question=x["problem"])
+            q_text = question_template.format(Question=q_text)
             messages.append([
                 {
                     "role": "user",
